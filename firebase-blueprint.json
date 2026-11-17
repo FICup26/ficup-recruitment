@@ -1,0 +1,415 @@
+{
+  "entities": {
+    "Candidatura": {
+      "title": "Candidatura",
+      "description": "Candidatura di un fantallenatore per la stagione FICUP 26/27.",
+      "type": "object",
+      "properties": {
+        "codiceCandidatura": {
+          "type": "string",
+          "description": "Codice identificativo univoco della candidatura (es. FICUP26-A1B2C3).",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^FICUP26-[A-Z0-9]{6}$"
+        },
+        "nome": {
+          "type": "string",
+          "description": "Nome del candidato.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "cognome": {
+          "type": "string",
+          "description": "Cognome del candidato.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "emailFantaleghe": {
+          "type": "string",
+          "format": "email",
+          "description": "Indirizzo email registrato su Fantaleghe.",
+          "minLength": 5,
+          "maxLength": 160,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "nomeSquadra": {
+          "type": "string",
+          "description": "Nome della squadra attuale o proposta.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "note": {
+          "type": "string",
+          "description": "Eventuale nota facoltativa inserita dal candidato.",
+          "maxLength": 1000
+        },
+        "stato": {
+          "type": "string",
+          "description": "Stato corrente della candidatura gestito dallo staff.",
+          "enum": [
+            "NUOVO",
+            "DA CONTATTARE",
+            "APPROVATO",
+            "INVITO INVIATO",
+            "DA COMPLETARE",
+            "COMPLETATO",
+            "RESPINTO"
+          ]
+        },
+        "noteInterne": {
+          "type": "string",
+          "description": "Note interne riservate esclusivamente agli amministratori.",
+          "maxLength": 2000
+        },
+        "consensoPrivacy": {
+          "type": "boolean",
+          "description": "Conferma esplicita del consenso al trattamento dei dati personali."
+        },
+        "versioneInformativa": {
+          "type": "string",
+          "description": "Versione dell'informativa privacy accettata.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di creazione della candidatura."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server dell'ultima modifica."
+        }
+      },
+      "required": [
+        "codiceCandidatura",
+        "nome",
+        "cognome",
+        "emailFantaleghe",
+        "nomeSquadra",
+        "stato",
+        "consensoPrivacy",
+        "versioneInformativa",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Amministratore": {
+      "title": "Amministratore",
+      "description": "Amministratore autorizzato ad accedere al pannello di gestione candidature.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Email Google verificata dell'amministratore.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "nome": {
+          "type": "string",
+          "description": "Nome visualizzato dell'amministratore.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "ruolo": {
+          "type": "string",
+          "description": "Livello di privilegio amministrativo.",
+          "enum": ["SUPER_ADMIN", "STAFF"]
+        },
+        "attivo": {
+          "type": "boolean",
+          "description": "Indica se l'account amministrativo e abilitato."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di creazione."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server dell'ultimo aggiornamento."
+        }
+      },
+      "required": ["email", "nome", "ruolo", "attivo", "createdAt", "updatedAt"]
+    },
+    "Configurazione": {
+      "title": "Configurazione",
+      "description": "Parametri operativi del reclutamento FICUP 26/27.",
+      "type": "object",
+      "properties": {
+        "stagione": {
+          "type": "string",
+          "description": "Stagione competitiva di riferimento.",
+          "minLength": 2,
+          "maxLength": 16
+        },
+        "iscrizioniAperte": {
+          "type": "boolean",
+          "description": "Stato apertura candidature pubbliche."
+        },
+        "budgetIniziale": {
+          "type": "number",
+          "description": "Budget crediti iniziale disponibile per la rosa."
+        },
+        "modalitaMercato": {
+          "type": "string",
+          "description": "Modalita di mercato della competizione.",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "versioneInformativa": {
+          "type": "string",
+          "description": "Versione corrente dell'informativa privacy.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "emailOperativa": {
+          "type": "string",
+          "format": "email",
+          "description": "Indirizzo email operativo dello staff FICUP.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "linkWhatsappProvvisorio": {
+          "type": "string",
+          "format": "uri",
+          "description": "Link di invito al gruppo WhatsApp provvisorio.",
+          "maxLength": 300
+        },
+        "linkWhatsappUfficiale": {
+          "type": "string",
+          "format": "uri",
+          "description": "Link di invito al gruppo WhatsApp ufficiale.",
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server dell'ultimo aggiornamento."
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Email dell'amministratore che ha salvato la configurazione.",
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "stagione",
+        "iscrizioniAperte",
+        "budgetIniziale",
+        "modalitaMercato",
+        "versioneInformativa",
+        "emailOperativa",
+        "updatedAt",
+        "updatedBy"
+      ]
+    },
+    "StoricoOperazione": {
+      "title": "StoricoOperazione",
+      "description": "Registro immutabile delle modifiche di stato eseguite dagli amministratori.",
+      "type": "object",
+      "properties": {
+        "candidaturaId": {
+          "type": "string",
+          "description": "ID documento della candidatura modificata.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "codiceCandidatura": {
+          "type": "string",
+          "description": "Codice univoco della candidatura.",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^FICUP26-[A-Z0-9]{6}$"
+        },
+        "statoPrecedente": {
+          "type": "string",
+          "description": "Stato prima della modifica.",
+          "enum": [
+            "NUOVO",
+            "DA CONTATTARE",
+            "APPROVATO",
+            "INVITO INVIATO",
+            "DA COMPLETARE",
+            "COMPLETATO",
+            "RESPINTO"
+          ]
+        },
+        "statoNuovo": {
+          "type": "string",
+          "description": "Nuovo stato assegnato.",
+          "enum": [
+            "NUOVO",
+            "DA CONTATTARE",
+            "APPROVATO",
+            "INVITO INVIATO",
+            "DA COMPLETARE",
+            "COMPLETATO",
+            "RESPINTO"
+          ]
+        },
+        "notaOperazione": {
+          "type": "string",
+          "description": "Nota operativa associata al cambio di stato.",
+          "maxLength": 1000
+        },
+        "adminUid": {
+          "type": "string",
+          "description": "UID Firebase Auth dell'amministratore.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "adminEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Email dell'amministratore.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server dell'operazione."
+        }
+      },
+      "required": [
+        "candidaturaId",
+        "codiceCandidatura",
+        "statoPrecedente",
+        "statoNuovo",
+        "adminUid",
+        "adminEmail",
+        "createdAt"
+      ]
+    },
+    "EmailLog": {
+      "title": "EmailLog",
+      "description": "Registro idempotente degli invii email gestito dal backend Google Apps Script.",
+      "type": "object",
+      "properties": {
+        "candidaturaId": {
+          "type": "string",
+          "description": "ID documento della candidatura associata.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "codiceCandidatura": {
+          "type": "string",
+          "description": "Codice identificativo della candidatura.",
+          "pattern": "^FICUP26-[A-Z0-9]{6}$"
+        },
+        "eventType": {
+          "type": "string",
+          "description": "Tipo di evento notificato.",
+          "enum": [
+            "NUOVO_CANDIDATO",
+            "NUOVO_ADMIN",
+            "STATO_APPROVATO",
+            "STATO_INVITO_INVIATO",
+            "STATO_COMPLETATO",
+            "STATO_RESPINTO"
+          ]
+        },
+        "statoCandidatura": {
+          "type": "string",
+          "description": "Stato della candidatura al momento dell'invio."
+        },
+        "recipient": {
+          "type": "string",
+          "format": "email",
+          "description": "Indirizzo email destinatario."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Oggetto della email inviata."
+        },
+        "status": {
+          "type": "string",
+          "description": "Stato corrente dell'invio.",
+          "enum": [
+            "PROCESSING",
+            "SENT",
+            "FAILED",
+            "RETRY_EXHAUSTED",
+            "SKIPPED_QUOTA"
+          ]
+        },
+        "attempts": {
+          "type": "number",
+          "description": "Numero di tentativi di invio effettuati."
+        },
+        "maxAttempts": {
+          "type": "number",
+          "description": "Numero massimo di tentativi consentiti."
+        },
+        "lastError": {
+          "type": "string",
+          "description": "Eventuale messaggio dell'ultimo errore."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "nextRetryAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "candidaturaId",
+        "codiceCandidatura",
+        "eventType",
+        "recipient",
+        "subject",
+        "status",
+        "attempts",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/candidature/{candidaturaId}": {
+      "schema": {
+        "$ref": "#/entities/Candidatura"
+      },
+      "description": "Raccolta delle candidature inviate dai fantallenatori. Scrittura pubblica validata solo in creazione; lettura e aggiornamento riservati allo staff."
+    },
+    "/amministratori/{adminId}": {
+      "schema": {
+        "$ref": "#/entities/Amministratore"
+      },
+      "description": "Elenco degli amministratori autorizzati (indicizzati per UID o email normalizzata)."
+    },
+    "/configurazione/{configId}": {
+      "schema": {
+        "$ref": "#/entities/Configurazione"
+      },
+      "description": "Configurazione operativa della piattaforma (il documento 'public' espone i soli parametri non sensibili; 'private' contiene il link WhatsApp ufficiale)."
+    },
+    "/storico_operazioni/{operazioneId}": {
+      "schema": {
+        "$ref": "#/entities/StoricoOperazione"
+      },
+      "description": "Audit log append-only delle transizioni di stato sulle candidature."
+    },
+    "/email_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/EmailLog"
+      },
+      "description": "Registro idempotente degli invii email gestiti da Google Apps Script."
+    }
+  }
+}

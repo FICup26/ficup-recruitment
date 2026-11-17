@@ -1,0 +1,6 @@
+{
+  "name": "FICUP Recruitment 26/27",
+  "description": "Portale ufficiale di reclutamento dei nuovi fantallenatori subentranti per la lega nazionale gratuita FICUP 26/27.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
