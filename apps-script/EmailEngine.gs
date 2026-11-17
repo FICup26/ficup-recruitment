@@ -201,7 +201,7 @@ function dispatchSingleIdempotentEmail_(candidatura, eventType, publicConfig, op
   // Invio effettivo fuori dal lock breve
   var emailSent = false;
   try {
-    GmailApp.sendEmail(payload.to, payload.subject, payload.textBody, {
+    MailApp.sendEmail(payload.to, payload.subject, payload.textBody, {
       htmlBody: payload.htmlBody,
       name: FICUP_CONFIG.SENDER_NAME,
       replyTo: FICUP_CONFIG.OPERATIONAL_EMAIL
