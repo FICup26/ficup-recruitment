@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
@@ -171,10 +172,22 @@ function toDateOrNull(value: unknown): Date | null {
   return null;
 }
 
+function isPermissionDeniedError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = String((error as { code?: unknown }).code).toLowerCase();
+    if (code === 'permission-denied' || code === 'firestore/permission-denied') {
+      return true;
+    }
+  }
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return msg.includes('missing or insufficient permissions') || msg.includes('permission-denied');
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
-  path: string | null
+  path: string | null,
+  options?: { suppressPermissionDeniedLog?: boolean }
 ): never {
   const currentUser = auth?.currentUser ?? null;
   const errorCode =
@@ -199,7 +212,9 @@ export function handleFirestoreError(
         })) ?? [],
     },
   };
-  console.error('Firestore Error:', JSON.stringify(errInfo));
+  if (!(options?.suppressPermissionDeniedLog && isPermissionDeniedError(error))) {
+    console.error('Firestore Error:', JSON.stringify(errInfo));
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -660,6 +675,750 @@ export async function fetchEmailLogsByCandidatura(
       })
       .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
   } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+// =============================================================================
+// 1. ACCETTAZIONE DOCUMENTI CANDIDATO (/accettazioni_documenti/{candidaturaId})
+// =============================================================================
+
+export interface AccettazioneDocumentaleInput {
+  candidaturaId: string;
+  codiceCandidatura: string;
+  emailFantaleghe: string;
+  privacyAccettata: boolean;
+  versionePrivacy: string;
+  regolamentoAccettato: boolean;
+  versioneRegolamento: string;
+  regolamentoDocId: string;
+  regoleChatAccettate: boolean;
+  versioneRegoleChat: string;
+}
+
+export interface AccettazioneDocumentaleRecord extends AccettazioneDocumentaleInput {
+  id: string;
+  acceptedAt: Date | null;
+  createdAt: Date | null;
+}
+
+export async function saveAccettazioneDocumentale(
+  input: AccettazioneDocumentaleInput
+): Promise<boolean> {
+  const firestore = requireDb();
+  const path = `accettazioni_documenti/${input.candidaturaId}`;
+  try {
+    await setDoc(doc(firestore, 'accettazioni_documenti', input.candidaturaId), {
+      candidaturaId: input.candidaturaId,
+      codiceCandidatura: input.codiceCandidatura.trim().toUpperCase(),
+      emailFantaleghe: input.emailFantaleghe.trim().toLowerCase(),
+      privacyAccettata: Boolean(input.privacyAccettata),
+      versionePrivacy: input.versionePrivacy.trim().slice(0, 32) || '2026.1',
+      regolamentoAccettato: Boolean(input.regolamentoAccettato),
+      versioneRegolamento:
+        input.versioneRegolamento.trim().slice(0, 64) || 'in-attesa-pubblicazione',
+      regolamentoDocId: input.regolamentoDocId.trim().slice(0, 128) || 'nessuno',
+      regoleChatAccettate: Boolean(input.regoleChatAccettate),
+      versioneRegoleChat: input.versioneRegoleChat.trim().slice(0, 32) || '2026.1',
+      acceptedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return false;
+    }
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function fetchAccettazioneByCandidatura(
+  candidaturaId: string
+): Promise<AccettazioneDocumentaleRecord | null> {
+  const firestore = requireDb();
+  const path = `accettazioni_documenti/${candidaturaId}`;
+  try {
+    const snap = await getDoc(doc(firestore, 'accettazioni_documenti', candidaturaId));
+    if (!snap.exists()) {
+      return null;
+    }
+    const d = snap.data();
+    return {
+      id: snap.id,
+      candidaturaId: String(d.candidaturaId ?? snap.id),
+      codiceCandidatura: String(d.codiceCandidatura ?? ''),
+      emailFantaleghe: String(d.emailFantaleghe ?? ''),
+      privacyAccettata: Boolean(d.privacyAccettata),
+      versionePrivacy: String(d.versionePrivacy ?? ''),
+      regolamentoAccettato: Boolean(d.regolamentoAccettato),
+      versioneRegolamento: String(d.versioneRegolamento ?? ''),
+      regolamentoDocId: String(d.regolamentoDocId ?? ''),
+      regoleChatAccettate: Boolean(d.regoleChatAccettate),
+      versioneRegoleChat: String(d.versioneRegoleChat ?? ''),
+      acceptedAt: toDateOrNull(d.acceptedAt),
+      createdAt: toDateOrNull(d.createdAt),
+    };
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return null;
+    }
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+// =============================================================================
+// 2. DOCUMENTI UFFICIALI FICUP (/documenti_ufficiali + Firebase Storage)
+// =============================================================================
+
+export type DocumentoTipo = 'REGOLAMENTO' | 'REGOLE_CHAT';
+
+export interface DocumentoUfficialeRecord {
+  id: string;
+  tipo: DocumentoTipo;
+  titolo: string;
+  versione: string;
+  dataPubblicazione: string;
+  fileName: string;
+  storagePath: string;
+  downloadUrl: string;
+  fileSizeBytes: number;
+  contenutoTesto: string;
+  attivo: boolean;
+  adminUid: string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+function mapDocumentoUfficiale(
+  id: string,
+  d: Record<string, unknown>
+): DocumentoUfficialeRecord {
+  return {
+    id,
+    tipo: d.tipo === 'REGOLE_CHAT' ? 'REGOLE_CHAT' : 'REGOLAMENTO',
+    titolo: String(d.titolo ?? ''),
+    versione: String(d.versione ?? ''),
+    dataPubblicazione: String(d.dataPubblicazione ?? ''),
+    fileName: String(d.fileName ?? ''),
+    storagePath: String(d.storagePath ?? ''),
+    downloadUrl: String(d.downloadUrl ?? ''),
+    fileSizeBytes: Number(d.fileSizeBytes ?? 0),
+    contenutoTesto: String(d.contenutoTesto ?? ''),
+    attivo: Boolean(d.attivo),
+    adminUid: String(d.adminUid ?? ''),
+    createdAt: toDateOrNull(d.createdAt),
+    updatedAt: toDateOrNull(d.updatedAt),
+  };
+}
+
+export const REGOLAMENTO_TESTO_MAX_LENGTH = 15000;
+
+const FIRESTORE_DOCUMENTO_TIMEOUT_MS = 20000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timerId = setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timerId !== undefined) {
+      clearTimeout(timerId);
+    }
+  }
+}
+
+/**
+ * Legge in sicurezza il puntatore pubblico del documento ufficiale attivo
+ * (`documenti_ufficiali/regolamento_attivo` oppure `regole_chat_attive`).
+ * Ritorna null senza lanciare errori se il documento non esiste ancora o se
+ * non risulta attualmente pubblicato (`attivo: false`).
+ */
+export async function fetchActivePublicDocument(
+  pointerId: 'regolamento_attivo' | 'regole_chat_attive'
+): Promise<DocumentoUfficialeRecord | null> {
+  if (!db) {
+    return null;
+  }
+  try {
+    const snap = await withTimeout(
+      getDoc(doc(db, 'documenti_ufficiali', pointerId)),
+      10000,
+      'Timeout lettura documento ufficiale pubblico.'
+    );
+    if (!snap.exists()) {
+      return null;
+    }
+    const mapped = mapDocumentoUfficiale(snap.id, snap.data());
+    if (!mapped.attivo) {
+      return null;
+    }
+    return mapped;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchDocumentiUfficialiHistory(): Promise<DocumentoUfficialeRecord[]> {
+  const firestore = requireDb();
+  const path = 'documenti_ufficiali';
+  try {
+    const snap = await withTimeout(
+      getDocs(collection(firestore, path)),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout durante il caricamento dello storico documenti su Cloud Firestore.'
+    );
+    return snap.docs
+      .filter((d) => d.id !== 'regolamento_attivo' && d.id !== 'regole_chat_attive')
+      .map((d) => mapDocumentoUfficiale(d.id, d.data()))
+      .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function saveRegolamentoTextVersion(params: {
+  titolo: string;
+  versione: string;
+  dataPubblicazione: string;
+  contenutoTesto: string;
+  setAsActive: boolean;
+  adminUser: User;
+}): Promise<DocumentoUfficialeRecord> {
+  const firestore = requireDb();
+  if (!params.adminUser?.uid) {
+    throw new Error('Sessione staff non valida: effettua nuovamente il login.');
+  }
+
+  const cleanTitolo = params.titolo.trim().slice(0, 120);
+  const cleanVersione = params.versione.trim().slice(0, 32);
+  const cleanData = params.dataPubblicazione.trim().slice(0, 32);
+  const cleanText = params.contenutoTesto.trim();
+
+  if (!cleanTitolo) {
+    throw new Error('Inserisci un titolo valido per il Regolamento ufficiale.');
+  }
+  if (!cleanVersione) {
+    throw new Error('Inserisci il numero di versione del Regolamento.');
+  }
+  if (!cleanText) {
+    throw new Error('Inserisci il testo del Regolamento ufficiale prima di salvare.');
+  }
+  if (cleanText.length > REGOLAMENTO_TESTO_MAX_LENGTH) {
+    throw new Error(
+      `Il testo supera il limite massimo consentito dalle regole Firestore (${REGOLAMENTO_TESTO_MAX_LENGTH} caratteri).`
+    );
+  }
+
+  const versionRef = doc(collection(firestore, 'documenti_ufficiali'));
+  const pointerRef = doc(firestore, 'documenti_ufficiali', 'regolamento_attivo');
+  const payload = {
+    tipo: 'REGOLAMENTO' as DocumentoTipo,
+    titolo: cleanTitolo,
+    versione: cleanVersione,
+    dataPubblicazione: cleanData,
+    fileName: '',
+    storagePath: '',
+    downloadUrl: '',
+    fileSizeBytes: 0,
+    contenutoTesto: cleanText,
+    attivo: params.setAsActive,
+    adminUid: params.adminUser.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    const batch = writeBatch(firestore);
+
+    if (params.setAsActive) {
+      const existingSnap = await withTimeout(
+        getDocs(
+          query(collection(firestore, 'documenti_ufficiali'), where('tipo', '==', 'REGOLAMENTO'))
+        ),
+        FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+        'Timeout durante la lettura delle versioni precedenti su Cloud Firestore.'
+      );
+      existingSnap.docs.forEach((d) => {
+        if (d.id !== 'regolamento_attivo' && d.data().attivo === true) {
+          batch.update(d.ref, { attivo: false, updatedAt: serverTimestamp() });
+        }
+      });
+      batch.set(pointerRef, payload);
+    }
+
+    batch.set(versionRef, payload);
+    await withTimeout(
+      batch.commit(),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout durante il salvataggio del regolamento su Cloud Firestore.'
+    );
+
+    return {
+      id: versionRef.id,
+      ...payload,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'documenti_ufficiali', {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function setActiveRegolamentoVersion(
+  record: DocumentoUfficialeRecord,
+  adminUser: User
+): Promise<void> {
+  const firestore = requireDb();
+  const path = `documenti_ufficiali/${record.id}`;
+
+  try {
+    const existingSnap = await withTimeout(
+      getDocs(
+        query(collection(firestore, 'documenti_ufficiali'), where('tipo', '==', 'REGOLAMENTO'))
+      ),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout lettura versioni su Cloud Firestore.'
+    );
+    const batch = writeBatch(firestore);
+
+    existingSnap.docs.forEach((d) => {
+      if (d.id === 'regolamento_attivo') {
+        return;
+      }
+      if (d.id === record.id) {
+        batch.update(d.ref, {
+          attivo: true,
+          adminUid: adminUser.uid,
+          updatedAt: serverTimestamp(),
+        });
+      } else if (d.data().attivo === true) {
+        batch.update(d.ref, {
+          attivo: false,
+          adminUid: adminUser.uid,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+
+    batch.set(doc(firestore, 'documenti_ufficiali', 'regolamento_attivo'), {
+      tipo: 'REGOLAMENTO' as DocumentoTipo,
+      titolo: record.titolo,
+      versione: record.versione,
+      dataPubblicazione: record.dataPubblicazione,
+      fileName: record.fileName,
+      storagePath: record.storagePath,
+      downloadUrl: record.downloadUrl,
+      fileSizeBytes: record.fileSizeBytes,
+      contenutoTesto: record.contenutoTesto,
+      attivo: true,
+      adminUid: adminUser.uid,
+      createdAt: record.createdAt ? Timestamp.fromDate(record.createdAt) : serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    await withTimeout(
+      batch.commit(),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout aggiornamento versione attiva su Cloud Firestore.'
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function deactivateActiveRegolamentoVersion(
+  record: DocumentoUfficialeRecord,
+  adminUser: User
+): Promise<void> {
+  const firestore = requireDb();
+  const path = `documenti_ufficiali/${record.id}`;
+
+  try {
+    const existingSnap = await withTimeout(
+      getDocs(
+        query(collection(firestore, 'documenti_ufficiali'), where('tipo', '==', 'REGOLAMENTO'))
+      ),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout lettura versioni su Cloud Firestore.'
+    );
+    const batch = writeBatch(firestore);
+
+    existingSnap.docs.forEach((d) => {
+      if (d.id === 'regolamento_attivo') {
+        return;
+      }
+      if (d.id === record.id || d.data().attivo === true) {
+        batch.update(d.ref, {
+          attivo: false,
+          adminUid: adminUser.uid,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+
+    batch.set(doc(firestore, 'documenti_ufficiali', 'regolamento_attivo'), {
+      tipo: 'REGOLAMENTO' as DocumentoTipo,
+      titolo: record.titolo,
+      versione: record.versione,
+      dataPubblicazione: record.dataPubblicazione,
+      fileName: record.fileName,
+      storagePath: record.storagePath,
+      downloadUrl: record.downloadUrl,
+      fileSizeBytes: record.fileSizeBytes,
+      contenutoTesto: record.contenutoTesto,
+      attivo: false,
+      adminUid: adminUser.uid,
+      createdAt: record.createdAt ? Timestamp.fromDate(record.createdAt) : serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    await withTimeout(
+      batch.commit(),
+      FIRESTORE_DOCUMENTO_TIMEOUT_MS,
+      'Timeout disattivazione regolamento su Cloud Firestore.'
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function saveActiveChatRulesDocument(params: {
+  titolo: string;
+  versione: string;
+  contenutoTesto: string;
+  adminUser: User;
+}): Promise<void> {
+  const firestore = requireDb();
+  const path = 'documenti_ufficiali/regole_chat_attive';
+  const payload = {
+    tipo: 'REGOLE_CHAT' as DocumentoTipo,
+    titolo: params.titolo.trim().slice(0, 120) || 'Regole Ufficiali Chat WhatsApp FICUP',
+    versione: params.versione.trim().slice(0, 32) || '2026.1',
+    dataPubblicazione: new Date().toISOString().slice(0, 10),
+    fileName: '',
+    storagePath: '',
+    downloadUrl: '',
+    fileSizeBytes: 0,
+    contenutoTesto: params.contenutoTesto.trim().slice(0, 15000),
+    attivo: true,
+    adminUid: params.adminUser.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    const batch = writeBatch(firestore);
+    batch.set(doc(firestore, 'documenti_ufficiali', 'regole_chat_attive'), payload);
+    batch.set(doc(collection(firestore, 'documenti_ufficiali')), payload);
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+// =============================================================================
+// 3. GESTIONE ACCESSI WHATSAPP (/whatsapp_gruppi & /whatsapp_autorizzazioni)
+// =============================================================================
+
+export type WhatsappGruppoCategoria = 'UFFICIALE' | 'CATEGORIA' | 'PROVVISORIO' | 'ALTRO';
+export type WhatsappAutorizzazioneStato =
+  | 'NON_AUTORIZZATO'
+  | 'IN_ATTESA'
+  | 'AUTORIZZATO'
+  | 'REVOCATO';
+
+export interface WhatsappGruppoRecord {
+  id: string;
+  nome: string;
+  categoria: WhatsappGruppoCategoria;
+  descrizione: string;
+  squadraAssociata: string;
+  linkInvito: string;
+  attivo: boolean;
+  updatedBy: string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export interface WhatsappAutorizzazioneRecord {
+  id: string;
+  candidaturaId: string;
+  codiceCandidatura: string;
+  statoAutorizzazione: WhatsappAutorizzazioneStato;
+  gruppoId: string;
+  gruppoNome: string;
+  linkAssegnato: string;
+  squadraAssegnataZonaVar: string;
+  autorizzatoDaEmail: string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export async function fetchWhatsappGruppi(options?: {
+  silentOnPermissionDenied?: boolean;
+}): Promise<WhatsappGruppoRecord[]> {
+  const firestore = requireDb();
+  const path = 'whatsapp_gruppi';
+  try {
+    const snap = await getDocs(collection(firestore, path));
+    return snap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          nome: String(data.nome ?? ''),
+          categoria: (['UFFICIALE', 'CATEGORIA', 'PROVVISORIO', 'ALTRO'].includes(
+            String(data.categoria)
+          )
+            ? data.categoria
+            : 'UFFICIALE') as WhatsappGruppoCategoria,
+          descrizione: String(data.descrizione ?? ''),
+          squadraAssociata: String(data.squadraAssociata ?? ''),
+          linkInvito: String(data.linkInvito ?? ''),
+          attivo: Boolean(data.attivo),
+          updatedBy: String(data.updatedBy ?? ''),
+          createdAt: toDateOrNull(data.createdAt),
+          updatedAt: toDateOrNull(data.updatedAt),
+        };
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  } catch (error) {
+    if (options?.silentOnPermissionDenied && isPermissionDeniedError(error)) {
+      return [];
+    }
+    handleFirestoreError(error, OperationType.LIST, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function saveWhatsappGruppo(params: {
+  id?: string;
+  nome: string;
+  categoria: WhatsappGruppoCategoria;
+  descrizione: string;
+  squadraAssociata: string;
+  linkInvito: string;
+  attivo: boolean;
+  adminEmail: string;
+}): Promise<string> {
+  const firestore = requireDb();
+  const targetRef = params.id
+    ? doc(firestore, 'whatsapp_gruppi', params.id)
+    : doc(collection(firestore, 'whatsapp_gruppi'));
+  const path = `whatsapp_gruppi/${targetRef.id}`;
+
+  const cleanUrl = params.linkInvito.trim().slice(0, 300);
+  if (!/^https:\/\/chat\.whatsapp\.com\//i.test(cleanUrl)) {
+    throw new Error(
+      'Inserisci un link WhatsApp valido che inizi con https://chat.whatsapp.com/...'
+    );
+  }
+
+  try {
+    if (params.id) {
+      await setDoc(
+        targetRef,
+        {
+          nome: params.nome.trim().slice(0, 100),
+          categoria: params.categoria,
+          descrizione: params.descrizione.trim().slice(0, 400),
+          squadraAssociata: params.squadraAssociata.trim().slice(0, 100),
+          linkInvito: cleanUrl,
+          attivo: params.attivo,
+          updatedBy: params.adminEmail,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else {
+      await setDoc(targetRef, {
+        nome: params.nome.trim().slice(0, 100),
+        categoria: params.categoria,
+        descrizione: params.descrizione.trim().slice(0, 400),
+        squadraAssociata: params.squadraAssociata.trim().slice(0, 100),
+        linkInvito: cleanUrl,
+        attivo: params.attivo,
+        updatedBy: params.adminEmail,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return targetRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function deleteWhatsappGruppo(groupId: string): Promise<void> {
+  const firestore = requireDb();
+  const path = `whatsapp_gruppi/${groupId}`;
+  try {
+    await deleteDoc(doc(firestore, 'whatsapp_gruppi', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export async function fetchWhatsappAutorizzazioniMap(): Promise<
+  Record<string, WhatsappAutorizzazioneRecord>
+> {
+  const firestore = requireDb();
+  const path = 'whatsapp_autorizzazioni';
+  try {
+    const snap = await getDocs(collection(firestore, path));
+    const map: Record<string, WhatsappAutorizzazioneRecord> = {};
+    snap.docs.forEach((d) => {
+      const data = d.data();
+      map[d.id] = {
+        id: d.id,
+        candidaturaId: String(data.candidaturaId ?? d.id),
+        codiceCandidatura: String(data.codiceCandidatura ?? ''),
+        statoAutorizzazione: (['NON_AUTORIZZATO', 'IN_ATTESA', 'AUTORIZZATO', 'REVOCATO'].includes(
+          String(data.statoAutorizzazione)
+        )
+          ? data.statoAutorizzazione
+          : 'NON_AUTORIZZATO') as WhatsappAutorizzazioneStato,
+        gruppoId: String(data.gruppoId ?? ''),
+        gruppoNome: String(data.gruppoNome ?? ''),
+        linkAssegnato: String(data.linkAssegnato ?? ''),
+        squadraAssegnataZonaVar: String(data.squadraAssegnataZonaVar ?? ''),
+        autorizzatoDaEmail: String(data.autorizzatoDaEmail ?? ''),
+        createdAt: toDateOrNull(data.createdAt),
+        updatedAt: toDateOrNull(data.updatedAt),
+      };
+    });
+    return map;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return {};
+    }
     handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function fetchWhatsappAutorizzazioneByCandidatura(
+  candidaturaId: string
+): Promise<WhatsappAutorizzazioneRecord | null> {
+  const firestore = requireDb();
+  const path = `whatsapp_autorizzazioni/${candidaturaId}`;
+  try {
+    const snap = await getDoc(doc(firestore, 'whatsapp_autorizzazioni', candidaturaId));
+    if (!snap.exists()) {
+      return null;
+    }
+    const data = snap.data();
+    return {
+      id: snap.id,
+      candidaturaId: String(data.candidaturaId ?? snap.id),
+      codiceCandidatura: String(data.codiceCandidatura ?? ''),
+      statoAutorizzazione: (['NON_AUTORIZZATO', 'IN_ATTESA', 'AUTORIZZATO', 'REVOCATO'].includes(
+        String(data.statoAutorizzazione)
+      )
+        ? data.statoAutorizzazione
+        : 'NON_AUTORIZZATO') as WhatsappAutorizzazioneStato,
+      gruppoId: String(data.gruppoId ?? ''),
+      gruppoNome: String(data.gruppoNome ?? ''),
+      linkAssegnato: String(data.linkAssegnato ?? ''),
+      squadraAssegnataZonaVar: String(data.squadraAssegnataZonaVar ?? ''),
+      autorizzatoDaEmail: String(data.autorizzatoDaEmail ?? ''),
+      createdAt: toDateOrNull(data.createdAt),
+      updatedAt: toDateOrNull(data.updatedAt),
+    };
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return null;
+    }
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function saveWhatsappAutorizzazioneByAdmin(params: {
+  candidaturaId: string;
+  codiceCandidatura: string;
+  statoCandidaturaCorrente: CandidaturaStato;
+  statoAutorizzazione: WhatsappAutorizzazioneStato;
+  gruppoId: string;
+  gruppoNome: string;
+  linkAssegnato: string;
+  squadraAssegnataZonaVar: string;
+  adminUser: User;
+}): Promise<void> {
+  const firestore = requireDb();
+  if (!params.adminUser.email) {
+    throw new Error('Account amministratore privo di indirizzo email verificato.');
+  }
+  const authRef = doc(firestore, 'whatsapp_autorizzazioni', params.candidaturaId);
+  const storicoRef = doc(collection(firestore, 'storico_operazioni'));
+  const path = `whatsapp_autorizzazioni/${params.candidaturaId}`;
+
+  try {
+    const existingSnap = await getDoc(authRef);
+    const batch = writeBatch(firestore);
+    const baseData = {
+      candidaturaId: params.candidaturaId,
+      codiceCandidatura: params.codiceCandidatura,
+      statoAutorizzazione: params.statoAutorizzazione,
+      gruppoId: params.gruppoId.trim().slice(0, 128),
+      gruppoNome: params.gruppoNome.trim().slice(0, 120),
+      linkAssegnato: params.linkAssegnato.trim().slice(0, 300),
+      squadraAssegnataZonaVar: params.squadraAssegnataZonaVar.trim().slice(0, 120),
+      autorizzatoDaEmail: params.adminUser.email,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (existingSnap.exists()) {
+      batch.set(authRef, baseData, { merge: true });
+    } else {
+      batch.set(authRef, {
+        ...baseData,
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    batch.set(storicoRef, {
+      candidaturaId: params.candidaturaId,
+      codiceCandidatura: params.codiceCandidatura,
+      statoPrecedente: params.statoCandidaturaCorrente,
+      statoNuovo: params.statoCandidaturaCorrente,
+      notaOperazione: `Accesso WhatsApp aggiornato (${params.statoAutorizzazione}${
+        params.gruppoNome ? ` · ${params.gruppoNome}` : ''
+      }${
+        params.squadraAssegnataZonaVar ? ` · Squadra: ${params.squadraAssegnataZonaVar}` : ''
+      })`.slice(0, 1000),
+      adminUid: params.adminUser.uid,
+      adminEmail: params.adminUser.email,
+      createdAt: serverTimestamp(),
+    });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path, {
+      suppressPermissionDeniedLog: true,
+    });
   }
 }

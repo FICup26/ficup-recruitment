@@ -77,7 +77,7 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
                 : 'border-transparent hover:text-[#0B1F4D]'
             }`}
           >
-            <span>Waiting Room</span>
+            <span>Area Personale</span>
             {hasWaitingPass && (
               <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" aria-hidden="true" />
             )}
@@ -170,7 +170,7 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
                     : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                Candidatura (7 passaggi)
+                Candidatura guidata
               </button>
               <button
                 type="button"
@@ -181,7 +181,7 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
                     : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <span>Waiting Room</span>
+                <span>Area Personale</span>
                 {hasWaitingPass && (
                   <span className="text-[11px] font-mono-tabular font-semibold text-[#0284C7]">
                     Pass attivo

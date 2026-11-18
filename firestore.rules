@@ -44,14 +44,20 @@ service cloud.firestore {
         request.auth.token.email.size() <= 160;
     }
 
+    function isAllowedAdminRole(ruolo) {
+      return ruolo is string && ruolo in ['SUPER_ADMIN', 'STAFF'];
+    }
+
     function isActiveAdminByUid() {
       return exists(/databases/$(database)/documents/amministratori/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/amministratori/$(request.auth.uid)).data.attivo == true;
+        get(/databases/$(database)/documents/amministratori/$(request.auth.uid)).data.attivo == true &&
+        isAllowedAdminRole(get(/databases/$(database)/documents/amministratori/$(request.auth.uid)).data.ruolo);
     }
 
     function isActiveAdminByEmail() {
       return exists(/databases/$(database)/documents/amministratori/$(request.auth.token.email)) &&
-        get(/databases/$(database)/documents/amministratori/$(request.auth.token.email)).data.attivo == true;
+        get(/databases/$(database)/documents/amministratori/$(request.auth.token.email)).data.attivo == true &&
+        isAllowedAdminRole(get(/databases/$(database)/documents/amministratori/$(request.auth.token.email)).data.ruolo);
     }
 
     function isAdmin() {
@@ -291,6 +297,213 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    function isValidDocumentoUfficiale(data) {
+      return data.keys().hasAll([
+          'tipo',
+          'titolo',
+          'versione',
+          'dataPubblicazione',
+          'fileName',
+          'storagePath',
+          'downloadUrl',
+          'fileSizeBytes',
+          'contenutoTesto',
+          'attivo',
+          'adminUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'tipo',
+          'titolo',
+          'versione',
+          'dataPubblicazione',
+          'fileName',
+          'storagePath',
+          'downloadUrl',
+          'fileSizeBytes',
+          'contenutoTesto',
+          'attivo',
+          'adminUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.tipo in ['REGOLAMENTO', 'REGOLE_CHAT'] &&
+        data.titolo is string &&
+        data.titolo.size() >= 1 &&
+        data.titolo.size() <= 120 &&
+        data.versione is string &&
+        data.versione.size() >= 1 &&
+        data.versione.size() <= 32 &&
+        data.dataPubblicazione is string &&
+        data.dataPubblicazione.size() <= 32 &&
+        data.fileName is string &&
+        data.fileName.size() <= 140 &&
+        data.storagePath is string &&
+        data.storagePath.size() <= 300 &&
+        data.downloadUrl is string &&
+        data.downloadUrl.size() <= 1000 &&
+        data.fileSizeBytes is number &&
+        data.fileSizeBytes >= 0 &&
+        data.fileSizeBytes <= 15728640 &&
+        data.contenutoTesto is string &&
+        data.contenutoTesto.size() <= 15000 &&
+        data.attivo is bool &&
+        data.adminUid is string &&
+        data.adminUid.size() >= 1 &&
+        data.adminUid.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAccettazioneCreate(data) {
+      return data.keys().hasAll([
+          'candidaturaId',
+          'codiceCandidatura',
+          'emailFantaleghe',
+          'privacyAccettata',
+          'versionePrivacy',
+          'regolamentoAccettato',
+          'versioneRegolamento',
+          'regolamentoDocId',
+          'regoleChatAccettate',
+          'versioneRegoleChat',
+          'acceptedAt',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'candidaturaId',
+          'codiceCandidatura',
+          'emailFantaleghe',
+          'privacyAccettata',
+          'versionePrivacy',
+          'regolamentoAccettato',
+          'versioneRegolamento',
+          'regolamentoDocId',
+          'regoleChatAccettate',
+          'versioneRegoleChat',
+          'acceptedAt',
+          'createdAt'
+        ]) &&
+        isValidId(data.candidaturaId) &&
+        data.codiceCandidatura is string &&
+        data.codiceCandidatura.size() == 14 &&
+        data.codiceCandidatura.matches('^FICUP26-[A-Z0-9]{6}$') &&
+        data.emailFantaleghe is string &&
+        data.emailFantaleghe.size() >= 5 &&
+        data.emailFantaleghe.size() <= 160 &&
+        data.emailFantaleghe.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$') &&
+        data.privacyAccettata is bool &&
+        data.privacyAccettata == true &&
+        data.versionePrivacy is string &&
+        data.versionePrivacy.size() >= 1 &&
+        data.versionePrivacy.size() <= 32 &&
+        data.regolamentoAccettato is bool &&
+        data.regolamentoAccettato == true &&
+        data.versioneRegolamento is string &&
+        data.versioneRegolamento.size() >= 1 &&
+        data.versioneRegolamento.size() <= 64 &&
+        data.regolamentoDocId is string &&
+        data.regolamentoDocId.size() >= 1 &&
+        data.regolamentoDocId.size() <= 128 &&
+        data.regoleChatAccettate is bool &&
+        data.regoleChatAccettate == true &&
+        data.versioneRegoleChat is string &&
+        data.versioneRegoleChat.size() >= 1 &&
+        data.versioneRegoleChat.size() <= 32 &&
+        data.acceptedAt == request.time &&
+        data.createdAt == request.time;
+    }
+
+    function isValidWhatsappGruppo(data) {
+      return data.keys().hasAll([
+          'nome',
+          'categoria',
+          'descrizione',
+          'squadraAssociata',
+          'linkInvito',
+          'attivo',
+          'updatedBy',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'nome',
+          'categoria',
+          'descrizione',
+          'squadraAssociata',
+          'linkInvito',
+          'attivo',
+          'updatedBy',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.nome is string &&
+        data.nome.size() >= 1 &&
+        data.nome.size() <= 100 &&
+        data.categoria in ['UFFICIALE', 'CATEGORIA', 'PROVVISORIO', 'ALTRO'] &&
+        data.descrizione is string &&
+        data.descrizione.size() <= 400 &&
+        data.squadraAssociata is string &&
+        data.squadraAssociata.size() <= 100 &&
+        data.linkInvito is string &&
+        data.linkInvito.size() >= 27 &&
+        data.linkInvito.size() <= 300 &&
+        data.linkInvito.matches('^https://chat\\.whatsapp\\.com/.+$') &&
+        data.attivo is bool &&
+        data.updatedBy is string &&
+        data.updatedBy.size() >= 5 &&
+        data.updatedBy.size() <= 160 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWhatsappAutorizzazione(data) {
+      return data.keys().hasAll([
+          'candidaturaId',
+          'codiceCandidatura',
+          'statoAutorizzazione',
+          'gruppoId',
+          'gruppoNome',
+          'linkAssegnato',
+          'squadraAssegnataZonaVar',
+          'autorizzatoDaEmail',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'candidaturaId',
+          'codiceCandidatura',
+          'statoAutorizzazione',
+          'gruppoId',
+          'gruppoNome',
+          'linkAssegnato',
+          'squadraAssegnataZonaVar',
+          'autorizzatoDaEmail',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.candidaturaId) &&
+        data.codiceCandidatura is string &&
+        data.codiceCandidatura.size() == 14 &&
+        data.codiceCandidatura.matches('^FICUP26-[A-Z0-9]{6}$') &&
+        data.statoAutorizzazione in ['NON_AUTORIZZATO', 'IN_ATTESA', 'AUTORIZZATO', 'REVOCATO'] &&
+        data.gruppoId is string &&
+        data.gruppoId.size() <= 128 &&
+        data.gruppoNome is string &&
+        data.gruppoNome.size() <= 120 &&
+        data.linkAssegnato is string &&
+        data.linkAssegnato.size() <= 300 &&
+        (data.linkAssegnato == '' || data.linkAssegnato.matches('^https://chat\\.whatsapp\\.com/.+$')) &&
+        data.squadraAssegnataZonaVar is string &&
+        data.squadraAssegnataZonaVar.size() <= 120 &&
+        data.autorizzatoDaEmail is string &&
+        data.autorizzatoDaEmail.size() >= 5 &&
+        data.autorizzatoDaEmail.size() <= 160 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection Rules
     // -------------------------------------------------------------------------
@@ -393,6 +606,113 @@ service cloud.firestore {
     match /email_logs/{logId} {
       allow get, list: if isAdmin();
       allow create, update, delete: if false;
+    }
+
+    // Documenti ufficiali FICUP (Regolamento PDF e Regole Chat):
+    // solo i puntatori pubblici attivi sono leggibili via get; elenco e gestione riservati allo staff.
+    match /documenti_ufficiali/{docId} {
+      allow get: if docId == 'regolamento_attivo' || docId == 'regole_chat_attive' || isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(docId) &&
+        isValidDocumentoUfficiale(incoming()) &&
+        (docId != 'regolamento_attivo' || incoming().tipo == 'REGOLAMENTO') &&
+        (docId != 'regole_chat_attive' || incoming().tipo == 'REGOLE_CHAT') &&
+        ((docId == 'regolamento_attivo' || docId == 'regole_chat_attive') || incoming().createdAt == request.time) &&
+        incoming().adminUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidId(docId) &&
+        isValidDocumentoUfficiale(incoming()) &&
+        incoming().tipo == existing().tipo &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            (docId == 'regolamento_attivo' || docId == 'regole_chat_attive') &&
+            (docId != 'regolamento_attivo' || incoming().tipo == 'REGOLAMENTO') &&
+            (docId != 'regole_chat_attive' || incoming().tipo == 'REGOLE_CHAT') &&
+            incoming().adminUid == request.auth.uid
+          ) ||
+          (
+            docId != 'regolamento_attivo' &&
+            docId != 'regole_chat_attive' &&
+            incoming().createdAt == existing().createdAt &&
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['attivo', 'updatedAt']) ||
+              (
+                incoming().adminUid == request.auth.uid &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['attivo', 'adminUid', 'updatedAt'])
+              )
+            )
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // Accettazioni documentali obbligatorie: creazione pubblica validata e legata
+    // a una candidatura esistente; lettura riservata agli amministratori; immutabile.
+    match /accettazioni_documenti/{candidaturaId} {
+      allow get, list: if isAdmin();
+
+      allow create: if isValidId(candidaturaId) &&
+        isValidAccettazioneCreate(incoming()) &&
+        incoming().candidaturaId == candidaturaId &&
+        exists(/databases/$(database)/documents/candidature/$(candidaturaId)) &&
+        get(/databases/$(database)/documents/candidature/$(candidaturaId)).data.codiceCandidatura == incoming().codiceCandidatura &&
+        get(/databases/$(database)/documents/candidature/$(candidaturaId)).data.emailFantaleghe == incoming().emailFantaleghe &&
+        get(/databases/$(database)/documents/candidature/$(candidaturaId)).data.versioneInformativa == incoming().versionePrivacy;
+
+      allow update, delete: if false;
+    }
+
+    // Gruppi WhatsApp configurati dallo staff: lettura e gestione strettamente riservate agli admin.
+    match /whatsapp_gruppi/{groupId} {
+      allow get, list: if isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(groupId) &&
+        isValidWhatsappGruppo(incoming()) &&
+        incoming().updatedBy == request.auth.token.email &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidId(groupId) &&
+        isValidWhatsappGruppo(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedBy == request.auth.token.email &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(groupId);
+    }
+
+    // Autorizzazioni WhatsApp e riferimento squadra per singola candidatura: riservato allo staff.
+    match /whatsapp_autorizzazioni/{candidaturaId} {
+      allow get, list: if isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(candidaturaId) &&
+        isValidWhatsappAutorizzazione(incoming()) &&
+        incoming().candidaturaId == candidaturaId &&
+        incoming().autorizzatoDaEmail == request.auth.token.email &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/candidature/$(candidaturaId)) &&
+        get(/databases/$(database)/documents/candidature/$(candidaturaId)).data.codiceCandidatura == incoming().codiceCandidatura;
+
+      allow update: if isAdmin() &&
+        isValidId(candidaturaId) &&
+        isValidWhatsappAutorizzazione(incoming()) &&
+        incoming().candidaturaId == candidaturaId &&
+        incoming().codiceCandidatura == existing().codiceCandidatura &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().autorizzatoDaEmail == request.auth.token.email &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if false;
     }
   }
 }

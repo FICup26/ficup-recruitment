@@ -159,3 +159,186 @@ export async function triggerCandidaturaNotification(
     return { triggered: false, sent: 0 };
   }
 }
+
+export interface AppsScriptConnectionDiagnostic {
+  configured: boolean;
+  urlValidFormat: boolean;
+  webAppReachable: boolean;
+  firestoreReadProbeOk: boolean | null;
+  endpointSecurityActive: boolean | null;
+  serviceName: string | null;
+  operationalEmail: string | null;
+  detail: string;
+  checkedAtIso: string;
+}
+
+/**
+ * Verifica in sola lettura il collegamento tra frontend e Web App Apps Script:
+ * 1) Presenza e formato di VITE_APPS_SCRIPT_WEBAPP_URL
+ * 2) Risposta GET (doGet) della Web App pubblicata
+ * 3) Con includeFirestoreReadProbe=true:
+ *    - Probe di sola lettura Firestore (:runQuery su codice inesistente, 0 scritture, 0 email)
+ *    - Verifica che notifyCandidaturaEvent senza credenziali risponda UNAUTHORIZED
+ */
+export async function verifyAppsScriptBackend(options?: {
+  includeFirestoreReadProbe?: boolean;
+}): Promise<AppsScriptConnectionDiagnostic> {
+  const checkedAtIso = new Date().toISOString();
+
+  if (!APPS_SCRIPT_URL) {
+    return {
+      configured: false,
+      urlValidFormat: false,
+      webAppReachable: false,
+      firestoreReadProbeOk: null,
+      endpointSecurityActive: null,
+      serviceName: null,
+      operationalEmail: null,
+      detail:
+        'Variabile VITE_APPS_SCRIPT_WEBAPP_URL non configurata nell’ambiente. Impostarla con l’URL /exec della Web App FICUP 26/27 - Backend e ricompilare il frontend.',
+      checkedAtIso,
+    };
+  }
+
+  if (!isAppsScriptConfigured) {
+    return {
+      configured: true,
+      urlValidFormat: false,
+      webAppReachable: false,
+      firestoreReadProbeOk: null,
+      endpointSecurityActive: null,
+      serviceName: null,
+      operationalEmail: null,
+      detail:
+        'Formato di VITE_APPS_SCRIPT_WEBAPP_URL non valido: atteso un URL https://script.google.com/macros/s/.../exec.',
+      checkedAtIso,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let serviceName: string | null = null;
+  let operationalEmail: string | null = null;
+
+  try {
+    const resp = await fetch(APPS_SCRIPT_URL, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    const raw = await resp.text();
+    const parsed = JSON.parse(raw) as {
+      ok?: boolean;
+      service?: string;
+      operationalEmail?: string;
+    };
+
+    if (!resp.ok || !parsed?.ok) {
+      return {
+        configured: true,
+        urlValidFormat: true,
+        webAppReachable: false,
+        firestoreReadProbeOk: null,
+        endpointSecurityActive: null,
+        serviceName: parsed?.service ?? null,
+        operationalEmail: parsed?.operationalEmail ?? null,
+        detail: `La Web App Apps Script ha risposto con stato anomalo (HTTP ${resp.status}).`,
+        checkedAtIso,
+      };
+    }
+
+    serviceName = parsed.service ?? null;
+    operationalEmail = parsed.operationalEmail ?? null;
+  } catch (err) {
+    const msg =
+      err instanceof Error && err.name === 'AbortError'
+        ? 'Timeout durante il contatto GET verso la Web App Apps Script.'
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return {
+      configured: true,
+      urlValidFormat: true,
+      webAppReachable: false,
+      firestoreReadProbeOk: null,
+      endpointSecurityActive: null,
+      serviceName: null,
+      operationalEmail: null,
+      detail: `Impossibile raggiungere la Web App Apps Script (${msg}). Verifica che la distribuzione sia pubblicata con accesso "Chiunque".`,
+      checkedAtIso,
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
+  if (!options?.includeFirestoreReadProbe) {
+    return {
+      configured: true,
+      urlValidFormat: true,
+      webAppReachable: true,
+      firestoreReadProbeOk: null,
+      endpointSecurityActive: null,
+      serviceName,
+      operationalEmail,
+      detail: `Web App Apps Script raggiungibile (${serviceName ?? 'servizio attivo'}). Avvia il probe completo per testare la lettura Firestore e la sicurezza degli endpoint.`,
+      checkedAtIso,
+    };
+  }
+
+  let firestoreReadProbeOk = false;
+  let endpointSecurityActive = false;
+  const notes: string[] = [];
+
+  try {
+    const wrProbe = await postToAppsScript<never>({
+      action: 'getWaitingRoomStatus',
+      codiceCandidatura: 'FICUP26-000000',
+      emailFantaleghe: 'readonly-probe@example.com',
+    });
+    if (wrProbe.ok === false && wrProbe.code === 'NOT_FOUND') {
+      firestoreReadProbeOk = true;
+      notes.push('Lettura Firestore via Apps Script OAuth verificata (HTTP 200 / query valida).');
+    } else if (wrProbe.code === 'RATE_LIMITED') {
+      firestoreReadProbeOk = true;
+      notes.push('Endpoint Waiting Room attivo (rate-limit protettivo attivo).');
+    } else {
+      notes.push(
+        `Probe lettura Firestore non confermato (${wrProbe.code ?? 'UNKNOWN'}: ${wrProbe.error ?? 'nessun dettaglio'}).`
+      );
+    }
+  } catch (err) {
+    notes.push(
+      `Errore probe lettura Firestore via Apps Script: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  try {
+    const secProbe = await postToAppsScript<never>({
+      action: 'notifyCandidaturaEvent',
+      candidaturaId: 'readonly-auth-probe',
+    });
+    if (secProbe.ok === false && secProbe.code === 'UNAUTHORIZED') {
+      endpointSecurityActive = true;
+      notes.push('Protezione UNAUTHORIZED su notifyCandidaturaEvent confermata.');
+    } else {
+      notes.push(
+        `Attenzione: notifyCandidaturaEvent ha risposto ${secProbe.code ?? (secProbe.ok ? 'OK' : 'ERRORE')} invece di UNAUTHORIZED (verifica di aver aggiornato e ridistribuito la Web App).`
+      );
+    }
+  } catch (err) {
+    notes.push(
+      `Errore verifica protezione notifyCandidaturaEvent: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  return {
+    configured: true,
+    urlValidFormat: true,
+    webAppReachable: true,
+    firestoreReadProbeOk,
+    endpointSecurityActive,
+    serviceName,
+    operationalEmail,
+    detail: notes.join(' '),
+    checkedAtIso,
+  };
+}

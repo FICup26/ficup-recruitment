@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  FileCheck2,
   History,
   Loader2,
   Mail,
+  MessageCircle,
   Send,
   X,
 } from 'lucide-react';
@@ -17,14 +19,21 @@ import {
   triggerCandidaturaNotification,
 } from '../lib/appsScriptClient';
 import {
+  fetchAccettazioneByCandidatura,
   fetchEmailLogsByCandidatura,
   fetchStoricoByCandidatura,
+  fetchWhatsappAutorizzazioneByCandidatura,
+  fetchWhatsappGruppi,
+  saveWhatsappAutorizzazioneByAdmin,
   STATI_CANDIDATURA,
   updateCandidaturaByAdmin,
+  type AccettazioneDocumentaleRecord,
   type CandidaturaRecord,
   type CandidaturaStato,
   type EmailLogRecord,
   type StoricoOperazioneRecord,
+  type WhatsappAutorizzazioneStato,
+  type WhatsappGruppoRecord,
 } from '../lib/firestore';
 import {
   buildNotificationDraft,
@@ -39,6 +48,7 @@ interface CandidaturaDetailModalProps {
   adminUser: User;
   operationalEmail?: string;
   onClose: () => void;
+  onWhatsappAuthChanged?: () => void;
 }
 
 export function statusBadgeStyle(stato: CandidaturaStato): string {
@@ -78,6 +88,7 @@ export function CandidaturaDetailModal({
   adminUser,
   operationalEmail = FICUP_OPERATIONAL_EMAIL,
   onClose,
+  onWhatsappAuthChanged,
 }: CandidaturaDetailModalProps) {
   const [statoNuovo, setStatoNuovo] = useState<CandidaturaStato>('NUOVO');
   const [noteInterne, setNoteInterne] = useState('');
@@ -94,6 +105,20 @@ export function CandidaturaDetailModal({
   const [emailLogsLoading, setEmailLogsLoading] = useState(false);
   const [emailLogsError, setEmailLogsError] = useState<string | null>(null);
   const [autoTriggerHint, setAutoTriggerHint] = useState<string | null>(null);
+
+  // Document acceptances state
+  const [accettazione, setAccettazione] = useState<AccettazioneDocumentaleRecord | null>(null);
+  const [accettazioneLoading, setAccettazioneLoading] = useState(false);
+  const [accettazioneError, setAccettazioneError] = useState<string | null>(null);
+
+  // WhatsApp & Team reference authorization state
+  const [waGruppi, setWaGruppi] = useState<WhatsappGruppoRecord[]>([]);
+  const [waStato, setWaStato] = useState<WhatsappAutorizzazioneStato>('NON_AUTORIZZATO');
+  const [waGruppoId, setWaGruppoId] = useState('');
+  const [waSquadraRef, setWaSquadraRef] = useState('');
+  const [waSaving, setWaSaving] = useState(false);
+  const [waSaveMsg, setWaSaveMsg] = useState<string | null>(null);
+  const [waError, setWaError] = useState<string | null>(null);
 
   const [templateKey, setTemplateKey] = useState<NotificationTemplateKey>('APPROVAZIONE');
   const [copiedEmail, setCopiedEmail] = useState(false);
@@ -122,12 +147,16 @@ export function CandidaturaDetailModal({
     setSaveSuccess(false);
     setAutoTriggerHint(null);
     setTemplateKey(getSuggestedTemplateForState(candidatura.stato));
+    setWaSaveMsg(null);
+    setWaError(null);
 
     let cancelled = false;
     setStoricoLoading(true);
     setStoricoError(null);
     setEmailLogsLoading(true);
     setEmailLogsError(null);
+    setAccettazioneLoading(true);
+    setAccettazioneError(null);
 
     fetchStoricoByCandidatura(candidatura.id)
       .then((records) => {
@@ -163,6 +192,43 @@ export function CandidaturaDetailModal({
         }
       });
 
+    fetchAccettazioneByCandidatura(candidatura.id)
+      .then((acc) => {
+        if (!cancelled) {
+          setAccettazione(acc);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setAccettazioneError(parseFirestoreUiError(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAccettazioneLoading(false);
+        }
+      });
+
+    Promise.all([
+      fetchWhatsappGruppi({ silentOnPermissionDenied: true }).catch(
+        () => [] as WhatsappGruppoRecord[]
+      ),
+      fetchWhatsappAutorizzazioneByCandidatura(candidatura.id).catch(() => null),
+    ]).then(([gruppi, authRec]) => {
+      if (!cancelled) {
+        setWaGruppi(gruppi);
+        if (authRec) {
+          setWaStato(authRec.statoAutorizzazione);
+          setWaGruppoId(authRec.gruppoId);
+          setWaSquadraRef(authRec.squadraAssegnataZonaVar);
+        } else {
+          setWaStato('NON_AUTORIZZATO');
+          setWaGruppoId('');
+          setWaSquadraRef('');
+        }
+      }
+    });
+
     return () => {
       cancelled = true;
     };
@@ -171,6 +237,36 @@ export function CandidaturaDetailModal({
   if (!candidatura) {
     return null;
   }
+
+  const handleSaveWhatsappAuth = async () => {
+    setWaSaving(true);
+    setWaSaveMsg(null);
+    setWaError(null);
+    try {
+      const selectedGroup = waGruppi.find((g) => g.id === waGruppoId) ?? null;
+      await saveWhatsappAutorizzazioneByAdmin({
+        candidaturaId: candidatura.id,
+        codiceCandidatura: candidatura.codiceCandidatura,
+        statoCandidaturaCorrente: candidatura.stato,
+        statoAutorizzazione: waStato,
+        gruppoId: selectedGroup?.id ?? waGruppoId,
+        gruppoNome: selectedGroup?.nome ?? '',
+        linkAssegnato: selectedGroup?.linkInvito ?? '',
+        squadraAssegnataZonaVar: waSquadraRef,
+        adminUser,
+      });
+      setWaSaveMsg(
+        'Autorizzazione WhatsApp salvata su Firestore e registrata nello storico operazioni.'
+      );
+      onWhatsappAuthChanged?.();
+      const refreshed = await fetchStoricoByCandidatura(candidatura.id).catch(() => null);
+      if (refreshed) setStorico(refreshed);
+    } catch (err) {
+      setWaError(parseFirestoreUiError(err));
+    } finally {
+      setWaSaving(false);
+    }
+  };
 
   const handleSave = async (targetState?: CandidaturaStato, autoNote?: string) => {
     const nextState = targetState ?? statoNuovo;
@@ -471,6 +567,144 @@ export function CandidaturaDetailModal({
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 <span>Salva stato e note</span>
+              </button>
+            </div>
+          </section>
+
+          {/* Accettazioni Documentali Registrate */}
+          <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <FileCheck2 className="w-4 h-4 text-[#C69214]" />
+              <h3 className="text-sm font-bold text-[#0B1F4D]">
+                Accettazioni documenti obbligatori (<span className="font-mono-tabular">accettazioni_documenti</span>)
+              </h3>
+            </div>
+
+            {accettazioneLoading ? (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Caricamento registro accettazioni...</span>
+              </div>
+            ) : accettazioneError ? (
+              <p className="text-xs text-amber-800">
+                Raccolta <span className="font-mono-tabular">accettazioni_documenti</span> non ancora leggibile ({accettazioneError}).
+              </p>
+            ) : accettazione ? (
+              <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-200 text-xs">
+                <div className="p-3 flex flex-wrap justify-between gap-2">
+                  <span className="text-slate-600">Informativa Privacy GDPR</span>
+                  <span className="font-mono-tabular font-semibold text-emerald-700">
+                    {accettazione.privacyAccettata ? 'Accettata' : 'No'} · v{accettazione.versionePrivacy}
+                  </span>
+                </div>
+                <div className="p-3 flex flex-wrap justify-between gap-2">
+                  <span className="text-slate-600">Regolamento ufficiale FICUP</span>
+                  <span className="font-mono-tabular font-semibold text-emerald-700">
+                    {accettazione.regolamentoAccettato ? 'Accettato' : 'No'} · v{accettazione.versioneRegolamento}
+                  </span>
+                </div>
+                <div className="p-3 flex flex-wrap justify-between gap-2">
+                  <span className="text-slate-600">Regole Chat WhatsApp Ufficiale</span>
+                  <span className="font-mono-tabular font-semibold text-emerald-700">
+                    {accettazione.regoleChatAccettate ? 'Accettate' : 'No'} · v{accettazione.versioneRegoleChat}
+                  </span>
+                </div>
+                <div className="p-3 flex flex-wrap justify-between gap-2 text-slate-500">
+                  <span>Timestamp registrazione</span>
+                  <span className="font-mono-tabular">{formatDateTime(accettazione.acceptedAt)}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600">
+                Nessun record separato in <span className="font-mono-tabular">accettazioni_documenti</span> (candidatura precedente all&apos;attivazione o in attesa di regole pubblicate). Consenso Privacy base: v{candidatura.versioneInformativa}.
+              </p>
+            )}
+          </section>
+
+          {/* Autorizzazione WhatsApp & Riferimento Squadra */}
+          <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-emerald-700" />
+              <h3 className="text-sm font-bold text-[#0B1F4D]">
+                Autorizzazione WhatsApp &amp; Squadra assegnata
+              </h3>
+            </div>
+
+            {waError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+                {waError}
+              </div>
+            )}
+            {waSaveMsg && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                {waSaveMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Stato autorizzazione WhatsApp
+                </label>
+                <select
+                  value={waStato}
+                  onChange={(e) => setWaStato(e.target.value as WhatsappAutorizzazioneStato)}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs sm:text-sm text-slate-900"
+                >
+                  <option value="NON_AUTORIZZATO">NON_AUTORIZZATO</option>
+                  <option value="IN_ATTESA">IN_ATTESA</option>
+                  <option value="AUTORIZZATO">AUTORIZZATO</option>
+                  <option value="REVOCATO">REVOCATO</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Gruppo WhatsApp associato
+                </label>
+                <select
+                  value={waGruppoId}
+                  onChange={(e) => setWaGruppoId(e.target.value)}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs sm:text-sm text-slate-900"
+                >
+                  <option value="">Gruppo predefinito (configurazione/private)</option>
+                  {waGruppi
+                    .filter((g) => g.attivo)
+                    .map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.nome} ({g.categoria})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Riferimento squadra (nota manuale — integrazione live Zona VAR ficup-c9186 non ancora collegata)
+              </label>
+              <input
+                type="text"
+                maxLength={120}
+                value={waSquadraRef}
+                onChange={(e) => setWaSquadraRef(e.target.value)}
+                placeholder="Es. Slot squadra assegnato..."
+                className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs sm:text-sm text-slate-900"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <span className="text-[11px] text-slate-500">
+                Nota: lo sblocco pubblico in Area Personale richiede anche stato <strong>COMPLETATO</strong>.
+              </span>
+              <button
+                type="button"
+                disabled={waSaving}
+                onClick={handleSaveWhatsappAuth}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {waSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Salva autorizzazione WhatsApp</span>
               </button>
             </div>
           </section>

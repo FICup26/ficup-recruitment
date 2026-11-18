@@ -253,25 +253,34 @@ export function HomePage({
                 initial={{ opacity: 0, y: 14 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.22, ease: 'easeOut' }}
-                className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
+                className="pt-2 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3"
               >
-                <button
-                  type="button"
-                  onClick={onScrollToStory}
-                  className="min-h-[50px] px-6 py-3.5 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-sm font-bold hover:bg-slate-50 hover:border-[#0B1F4D]/40 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span>SCOPRI LA NOSTRA STORIA</span>
-                  <ChevronDown className="w-4 h-4 text-[#C69214]" />
-                </button>
-
                 <button
                   type="button"
                   onClick={onStartWizard}
                   disabled={isClosed}
                   className="min-h-[50px] px-6 py-3.5 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                 >
-                  <span>ENTRA NELLA COMMUNITY</span>
+                  <span>{isClosed ? 'Candidature chiuse' : 'CANDIDATI ORA'}</span>
                   <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onOpenWaitingRoom}
+                  className="min-h-[50px] px-5 py-3.5 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-sm font-bold hover:bg-slate-50 hover:border-[#0B1F4D]/40 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <DoorOpen className="w-4 h-4 text-[#0284C7]" />
+                  <span>Area Personale</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onScrollToStory}
+                  className="min-h-[46px] px-3 py-2 text-[#0B1F4D] text-xs sm:text-sm font-semibold hover:text-[#153985] transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <span>Scopri la nostra storia</span>
+                  <ChevronDown className="w-4 h-4 text-[#C69214]" />
                 </button>
               </motion.div>
 
@@ -283,7 +292,7 @@ export function HomePage({
                     className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-[#0284C7] hover:text-[#0B1F4D] underline underline-offset-4 cursor-pointer"
                   >
                     <DoorOpen className="w-4 h-4" />
-                    <span>Hai una candidatura salvata: apri la tua Waiting Room</span>
+                    <span>Hai una candidatura salvata: monitora lo stato nell&apos;Area Personale</span>
                   </button>
                 </div>
               )}
@@ -319,6 +328,59 @@ export function HomePage({
                 </div>
               </div>
             </motion.div>
+          </div>
+        </div>
+      </section>
+
+      {/* =====================================================================
+          3B. PERCORSO DI INGRESSO IN 3 PASSAGGI CHIARI
+         ===================================================================== */}
+      <section className="bg-slate-50/60 border-b border-slate-200 py-12 sm:py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 space-y-8">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div className="space-y-2 max-w-2xl">
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#C69214]">
+                Percorso ufficiale FICUP {config.stagione}
+              </p>
+              <h2 className="font-display text-2xl sm:text-3xl font-black tracking-tight text-[#0B1F4D]">
+                COME FUNZIONA L&apos;INGRESSO NELLA LEGA
+              </h2>
+            </div>
+            <p className="text-xs sm:text-sm text-slate-600">
+              Stagione {config.stagione} · {config.modalitaMercato} · {config.budgetIniziale} crediti · Quota 0 €
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-2xs">
+              <p className="font-mono-tabular text-xs font-bold text-[#C69214]">01 · CANDIDATURA</p>
+              <h3 className="font-display text-lg font-extrabold text-[#0B1F4D]">
+                1. Presenta la candidatura
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Inserisci i tuoi dati Fantaleghe, prendi visione di Privacy, Regolamento PDF e Regole ufficiali della chat WhatsApp e ottieni subito il codice <span className="font-mono-tabular font-semibold text-[#0B1F4D]">FICUP26</span>.
+              </p>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-2xs">
+              <p className="font-mono-tabular text-xs font-bold text-[#0284C7]">02 · VALUTAZIONE</p>
+              <h3 className="font-display text-lg font-extrabold text-[#0B1F4D]">
+                2. Attendi la valutazione dello staff
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Segui ogni aggiornamento in tempo reale nella tua Area Personale e coordinati sul gruppo provvisorio con il tuo codice identificativo.
+              </p>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-2xs">
+              <p className="font-mono-tabular text-xs font-bold text-emerald-700">03 · COMMUNITY</p>
+              <h3 className="font-display text-lg font-extrabold text-[#0B1F4D]">
+                3. Ottieni squadra e gruppo ufficiale
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Ricevi l&apos;invito ufficiale su Fantaleghe, completa la tua squadra e sblocca il collegamento al Gruppo WhatsApp Ufficiale autorizzato dallo staff.
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -822,7 +884,7 @@ export function HomePage({
           <div className="rounded-3xl border border-slate-200 bg-slate-50/80 p-6 sm:p-10 lg:p-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
             <div className="lg:col-span-7 space-y-4">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#C69214]">
-                Reclutamento subentranti · Procedura in 7 passaggi
+                Reclutamento subentranti · Procedura guidata ufficiale
               </p>
               <h2 className="font-display text-3xl sm:text-4xl font-black tracking-tight text-[#0B1F4D] text-balance">
                 LA PROSSIMA STAGIONE POTREBBE INIZIARE DA QUI.
@@ -856,7 +918,7 @@ export function HomePage({
                 className="min-h-[54px] w-full px-6 py-4 rounded-xl bg-[#0B1F4D] text-white text-sm sm:text-base font-bold hover:bg-[#153985] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
               >
                 <span>
-                  {isClosed ? 'Candidature chiuse' : 'AVVIA CANDIDATURA (7 PASSAGGI)'}
+                  {isClosed ? 'Candidature chiuse' : 'CANDIDATI ORA'}
                 </span>
                 <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
               </button>
@@ -867,7 +929,7 @@ export function HomePage({
                 className="min-h-[48px] w-full px-5 py-3 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-sm font-semibold hover:bg-slate-100 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
               >
                 <DoorOpen className="w-4 h-4 text-[#0284C7]" />
-                <span>Accedi alla Waiting Room</span>
+                <span>Accedi all&apos;Area Personale</span>
               </button>
             </div>
           </div>

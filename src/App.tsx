@@ -227,14 +227,14 @@ function FicupPortal() {
                 onClick={() => handleNavigate('wizard')}
                 className="hover:text-[#0B1F4D] underline underline-offset-2 cursor-pointer"
               >
-                Candidatura (7 passaggi)
+                Candidatura guidata
               </button>
               <button
                 type="button"
                 onClick={() => handleNavigate('waiting-room')}
                 className="hover:text-[#0B1F4D] underline underline-offset-2 cursor-pointer"
               >
-                Waiting Room
+                Area Personale
               </button>
               <button
                 type="button"

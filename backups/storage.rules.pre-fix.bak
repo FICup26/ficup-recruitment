@@ -1,0 +1,37 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Regola predefinita di sicurezza: nega ogni accesso non esplicitamente consentito.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedInVerifiedAdmin() {
+      return request.auth != null &&
+        request.auth.token.email_verified == true &&
+        (
+          (
+            firestore.exists(/databases/(default)/documents/amministratori/$(request.auth.uid)) &&
+            firestore.get(/databases/(default)/documents/amministratori/$(request.auth.uid)).data.attivo == true
+          ) ||
+          (
+            request.auth.token.email is string &&
+            firestore.exists(/databases/(default)/documents/amministratori/$(request.auth.token.email)) &&
+            firestore.get(/databases/(default)/documents/amministratori/$(request.auth.token.email)).data.attivo == true
+          )
+        );
+    }
+
+    // Regolamento ufficiale FICUP in PDF: lettura pubblica per anteprima/download,
+    // caricamento esclusivo dello staff amministrativo (solo PDF <= 15 MB).
+    match /documenti_ufficiali/regolamento/{fileName} {
+      allow get: if true;
+      allow list: if isSignedInVerifiedAdmin();
+      allow write: if isSignedInVerifiedAdmin() &&
+        request.resource != null &&
+        request.resource.size <= 15 * 1024 * 1024 &&
+        request.resource.contentType == 'application/pdf';
+    }
+  }
+}

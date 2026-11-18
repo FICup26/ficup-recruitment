@@ -5,16 +5,23 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  FileText,
   Loader2,
   LogOut,
+  MessageCircle,
   RefreshCw,
   Search,
   Settings,
+  Shield,
   ShieldAlert,
   ShieldCheck,
   Users,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  verifyAppsScriptBackend,
+  type AppsScriptConnectionDiagnostic,
+} from '../lib/appsScriptClient';
 import {
   auth,
   firebaseConfigStatus,
@@ -26,6 +33,7 @@ import {
 import {
   DEFAULT_PUBLIC_CONFIG,
   fetchAmministratori,
+  fetchWhatsappAutorizzazioniMap,
   getAdminConfig,
   saveAdminConfig,
   STATI_CANDIDATURA,
@@ -35,8 +43,12 @@ import {
   type CandidaturaRecord,
   type CandidaturaStato,
   type ConfigurazionePublica,
+  type WhatsappAutorizzazioneRecord,
 } from '../lib/firestore';
 import { parseFirestoreUiError } from '../lib/notifications';
+import { AdminDocumentiSection } from './AdminDocumentiSection';
+import { AdminWhatsappSection } from './AdminWhatsappSection';
+import { AdminZonaVarSection } from './AdminZonaVarSection';
 import { CandidaturaDetailModal, statusBadgeStyle } from './CandidaturaDetailModal';
 import { FicupLogo } from './FicupLogo';
 import { SuperAdminDiagnosticPanel } from './SuperAdminDiagnosticPanel';
@@ -46,7 +58,16 @@ interface AdminPanelProps {
   onConfigSaved: (nextConfig: Omit<ConfigurazionePublica, 'updatedAt' | 'updatedBy'>) => void;
 }
 
-type AdminTab = 'candidature' | 'configurazione' | 'amministratori' | 'diagnostica';
+type AdminTab =
+  | 'candidature'
+  | 'documenti'
+  | 'zonavar'
+  | 'whatsapp'
+  | 'configurazione'
+  | 'amministratori'
+  | 'diagnostica';
+
+type CandidaturaFilter = CandidaturaStato | 'TUTTE' | 'AUTORIZZATI_WA' | 'SENZA_SQUADRA';
 
 function formatShortDate(date: Date | null): string {
   if (!date) {
@@ -100,8 +121,9 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const [candLoading, setCandLoading] = useState(false);
   const [candError, setCandError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [stateFilter, setStateFilter] = useState<CandidaturaStato | 'TUTTE'>('TUTTE');
+  const [stateFilter, setStateFilter] = useState<CandidaturaFilter>('TUTTE');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [waAuthMap, setWaAuthMap] = useState<Record<string, WhatsappAutorizzazioneRecord>>({});
 
   // Admins list state
   const [adminsList, setAdminsList] = useState<AmministratoreRecord[]>([]);
@@ -116,6 +138,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
 
   // Diagnostics state
   const [diagnostics, setDiagnostics] = useState<FirebaseEnvironmentDiagnostics | null>(null);
+  const [appsScriptDiag, setAppsScriptDiag] = useState<AppsScriptConnectionDiagnostic | null>(null);
+  const [appsScriptProbeLoading, setAppsScriptProbeLoading] = useState(false);
   const [diagLoading, setDiagLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<'email' | 'uid' | null>(null);
 
@@ -185,6 +209,27 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     return () => unsubscribe();
   }, [adminRecord]);
 
+  const loadWhatsappAuthMap = async () => {
+    if (!adminRecord) {
+      setWaAuthMap({});
+      return;
+    }
+    try {
+      const map = await fetchWhatsappAutorizzazioniMap();
+      setWaAuthMap(map);
+    } catch {
+      // Non-blocking if whatsapp_autorizzazioni rules are not yet published
+    }
+  };
+
+  useEffect(() => {
+    if (!adminRecord) {
+      setWaAuthMap({});
+      return;
+    }
+    loadWhatsappAuthMap();
+  }, [adminRecord]);
+
   const loadAdmins = async () => {
     if (!adminRecord) {
       return;
@@ -201,13 +246,27 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     }
   };
 
-  const runDiagnostics = async () => {
+  const runDiagnostics = async (includeAppsScriptProbe = false) => {
     setDiagLoading(true);
     try {
-      const res = await verifyFirebaseServices();
-      setDiagnostics(res);
+      const [fbRes, gasRes] = await Promise.all([
+        verifyFirebaseServices(),
+        verifyAppsScriptBackend({ includeFirestoreReadProbe: includeAppsScriptProbe }),
+      ]);
+      setDiagnostics(fbRes);
+      setAppsScriptDiag(gasRes);
     } finally {
       setDiagLoading(false);
+    }
+  };
+
+  const runAppsScriptProbe = async () => {
+    setAppsScriptProbeLoading(true);
+    try {
+      const gasRes = await verifyAppsScriptBackend({ includeFirestoreReadProbe: true });
+      setAppsScriptDiag(gasRes);
+    } finally {
+      setAppsScriptProbeLoading(false);
     }
   };
 
@@ -332,6 +391,17 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     }
   };
 
+  const isWaAuthorized = (c: CandidaturaRecord): boolean => {
+    const authRec = waAuthMap[c.id];
+    if (authRec?.statoAutorizzazione === 'REVOCATO') {
+      return false;
+    }
+    if (authRec?.statoAutorizzazione === 'AUTORIZZATO') {
+      return true;
+    }
+    return c.stato === 'COMPLETATO';
+  };
+
   const metrics = useMemo(() => {
     const total = candidature.length;
     const nuove = candidature.filter((c) => c.stato === 'NUOVO').length;
@@ -341,27 +411,44 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     const invitiInviati = candidature.filter((c) => c.stato === 'INVITO INVIATO').length;
     const daCompletare = candidature.filter((c) => c.stato === 'DA COMPLETARE').length;
     const completate = candidature.filter((c) => c.stato === 'COMPLETATO').length;
-    return { total, nuove, inAttesa, invitiInviati, daCompletare, completate };
-  }, [candidature]);
+    const respinte = candidature.filter((c) => c.stato === 'RESPINTO').length;
+    const autorizzatiWa = candidature.filter((c) => isWaAuthorized(c)).length;
+    return {
+      total,
+      nuove,
+      inAttesa,
+      invitiInviati,
+      daCompletare,
+      completate,
+      respinte,
+      autorizzatiWa,
+    };
+  }, [candidature, waAuthMap]);
 
   const filteredCandidature = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return candidature.filter((c) => {
-      if (stateFilter !== 'TUTTE' && c.stato !== stateFilter) {
+      if (stateFilter === 'AUTORIZZATI_WA') {
+        if (!isWaAuthorized(c)) return false;
+      } else if (stateFilter === 'SENZA_SQUADRA') {
+        if (waAuthMap[c.id]?.squadraAssegnataZonaVar) return false;
+      } else if (stateFilter !== 'TUTTE' && c.stato !== stateFilter) {
         return false;
       }
       if (!q) {
         return true;
       }
+      const assignedTeam = waAuthMap[c.id]?.squadraAssegnataZonaVar ?? '';
       return (
         c.codiceCandidatura.toLowerCase().includes(q) ||
         c.nome.toLowerCase().includes(q) ||
         c.cognome.toLowerCase().includes(q) ||
         c.emailFantaleghe.toLowerCase().includes(q) ||
-        c.nomeSquadra.toLowerCase().includes(q)
+        c.nomeSquadra.toLowerCase().includes(q) ||
+        assignedTeam.toLowerCase().includes(q)
       );
     });
-  }, [candidature, searchTerm, stateFilter]);
+  }, [candidature, searchTerm, stateFilter, waAuthMap]);
 
   const selectedCandidatura = useMemo(
     () => candidature.find((c) => c.id === selectedId) ?? null,
@@ -630,6 +717,42 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('documenti')}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'documenti'
+                ? 'bg-[#0B1F4D] text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Documenti Ufficiali</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('zonavar')}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'zonavar'
+                ? 'bg-[#0B1F4D] text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            <span>Squadre · Zona VAR</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('whatsapp')}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'whatsapp'
+                ? 'bg-[#0B1F4D] text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            <span>Accessi WhatsApp ({metrics.autorizzatiWa})</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('configurazione')}
             className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
               activeTab === 'configurazione'
@@ -669,8 +792,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         {/* TAB 1: CANDIDATURE */}
         {activeTab === 'candidature' && (
           <div className="space-y-6">
-            {/* 6 KPI Metric Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* 8 KPI Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="bg-white border border-slate-200 rounded-2xl p-4">
                 <p className="text-xs font-medium text-slate-500">Totale</p>
                 <p className="mt-1 text-2xl font-extrabold text-[#0B1F4D] font-mono-tabular">
@@ -705,6 +828,18 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                 <p className="text-xs font-medium text-slate-500">Completate</p>
                 <p className="mt-1 text-2xl font-extrabold text-emerald-700 font-mono-tabular">
                   {metrics.completate}
+                </p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                <p className="text-xs font-medium text-slate-500">Respinte</p>
+                <p className="mt-1 text-2xl font-extrabold text-red-700 font-mono-tabular">
+                  {metrics.respinte}
+                </p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                <p className="text-xs font-medium text-slate-500">Autorizzati WA</p>
+                <p className="mt-1 text-2xl font-extrabold text-emerald-800 font-mono-tabular">
+                  {metrics.autorizzatiWa}
                 </p>
               </div>
             </div>
@@ -748,6 +883,28 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                     {st}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => setStateFilter('AUTORIZZATI_WA')}
+                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    stateFilter === 'AUTORIZZATI_WA'
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  AUTORIZZATI WA
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStateFilter('SENZA_SQUADRA')}
+                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    stateFilter === 'SENZA_SQUADRA'
+                      ? 'bg-[#C69214] text-white'
+                      : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  SENZA SQUADRA ZONA VAR
+                </button>
               </div>
             </div>
 
@@ -880,6 +1037,17 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
               </>
             )}
           </div>
+        )}
+
+        {/* TAB: DOCUMENTI UFFICIALI */}
+        {activeTab === 'documenti' && <AdminDocumentiSection adminUser={user} />}
+
+        {/* TAB: SQUADRE ZONA VAR */}
+        {activeTab === 'zonavar' && <AdminZonaVarSection />}
+
+        {/* TAB: ACCESSI WHATSAPP */}
+        {activeTab === 'whatsapp' && (
+          <AdminWhatsappSection adminUser={user} candidature={candidature} />
         )}
 
         {/* TAB 2: CONFIGURAZIONE */}
@@ -1133,7 +1301,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
               <button
                 type="button"
                 disabled={diagLoading}
-                onClick={runDiagnostics}
+                onClick={() => runDiagnostics(false)}
                 className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-semibold hover:bg-[#153985] disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer shrink-0"
               >
                 {diagLoading ? (
@@ -1174,6 +1342,58 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                 ))}
               </div>
             )}
+
+            {appsScriptDiag && (
+              <div
+                className={`rounded-xl border p-4 space-y-2.5 text-sm ${
+                  appsScriptDiag.webAppReachable &&
+                  appsScriptDiag.firestoreReadProbeOk !== false &&
+                  appsScriptDiag.endpointSecurityActive !== false
+                    ? 'border-emerald-200 bg-emerald-50/50'
+                    : 'border-amber-200 bg-amber-50/50'
+                }`}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 font-bold text-slate-900">
+                    {appsScriptDiag.webAppReachable ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                    )}
+                    <span>Backend Google Apps Script (sola lettura · 0 email)</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={appsScriptProbeLoading || !appsScriptDiag.urlValidFormat}
+                    onClick={runAppsScriptProbe}
+                    className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#0B1F4D] text-white text-xs font-semibold hover:bg-[#153985] disabled:opacity-50 inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    {appsScriptProbeLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Activity className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    )}
+                    <span>Test sola lettura Firestore + sicurezza</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed">{appsScriptDiag.detail}</p>
+                <div className="flex flex-wrap gap-3 text-[11px] font-mono-tabular text-slate-600">
+                  <span>URL configurato: {appsScriptDiag.configured ? 'sì' : 'no'}</span>
+                  <span>Web App GET: {appsScriptDiag.webAppReachable ? 'OK' : 'NO'}</span>
+                  {appsScriptDiag.firestoreReadProbeOk !== null && (
+                    <span>
+                      Lettura Firestore OAuth: {appsScriptDiag.firestoreReadProbeOk ? 'OK' : 'KO'}
+                    </span>
+                  )}
+                  {appsScriptDiag.endpointSecurityActive !== null && (
+                    <span>
+                      Blocco UNAUTHORIZED: {appsScriptDiag.endpointSecurityActive ? 'OK' : 'KO'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {adminRecord.ruolo === 'SUPER_ADMIN' && <SuperAdminDiagnosticPanel />}
           </div>
         )}
@@ -1184,6 +1404,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         adminUser={user}
         operationalEmail={publicConfig.emailOperativa}
         onClose={() => setSelectedId(null)}
+        onWhatsappAuthChanged={loadWhatsappAuthMap}
       />
     </div>
   );

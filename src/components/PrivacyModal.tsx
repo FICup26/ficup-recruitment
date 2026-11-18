@@ -1,5 +1,6 @@
-import { ShieldCheck, X } from 'lucide-react';
+import { AlertCircle, ShieldCheck, X } from 'lucide-react';
 import { FICUP_OPERATIONAL_EMAIL } from '../lib/notifications';
+import { GDPR_PRIVACY_SECTIONS } from '../lib/officialDocuments';
 
 interface PrivacyModalProps {
   open: boolean;
@@ -33,9 +34,12 @@ export function PrivacyModal({
             </div>
             <div>
               <p className="text-xs font-medium text-slate-500">
-                Informativa Privacy · Versione {version}
+                Informativa Privacy GDPR · Versione {version}
               </p>
-              <h2 id="privacy-modal-title" className="font-display text-base sm:text-lg font-bold text-[#0B1F4D]">
+              <h2
+                id="privacy-modal-title"
+                className="font-display text-base sm:text-lg font-bold text-[#0B1F4D]"
+              >
                 Trattamento dei dati personali — FANTA ITALIA CUP
               </h2>
             </div>
@@ -51,42 +55,40 @@ export function PrivacyModal({
         </div>
 
         <div className="p-5 sm:p-6 overflow-y-auto space-y-4 text-sm text-slate-700 leading-relaxed">
-          <section className="space-y-1.5">
-            <h3 className="font-semibold text-[#0B1F4D]">1. Titolare e finalità del trattamento</h3>
-            <p>
-              I dati raccolti tramite il portale <strong>FANTA ITALIA CUP</strong> sono trattati esclusivamente dallo staff organizzativo (contatto operativo:{' '}
-              <span className="font-mono-tabular text-[#0B1F4D]">{operationalEmail}</span>) per gestire le candidature dei nuovi fantallenatori subentranti, verificare i requisiti di partecipazione e inviare l&apos;invito alla competizione su Fantaleghe.
-            </p>
-          </section>
+          <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 flex items-start gap-2.5 text-xs text-amber-950">
+            <AlertCircle className="w-4 h-4 text-[#C69214] shrink-0 mt-0.5" />
+            <span>
+              <strong>Bozza informativa GDPR:</strong> i campi contrassegnati con{' '}
+              <span className="font-mono-tabular font-semibold">[DA CONFERMARE]</span> devono
+              essere confermati dal Titolare legale prima della pubblicazione legale definitiva.
+            </span>
+          </div>
 
-          <section className="space-y-1.5">
-            <h3 className="font-semibold text-[#0B1F4D]">2. Dati raccolti (principio di minimizzazione)</h3>
-            <p>
-              Vengono richiesti esclusivamente i dati strettamente necessari alla procedura di ingresso: Nome, Cognome, indirizzo email utilizzato su Fantaleghe, nome della squadra attuale ed eventuali note facoltative, oltre al codice candidatura generato e al timestamp di registrazione. Non vengono raccolti dati sensibili, documenti d&apos;identità o informazioni non pertinenti.
-            </p>
-          </section>
+          {GDPR_PRIVACY_SECTIONS.map((section) => (
+            <section key={section.id} className="space-y-1.5">
+              <h3 className="font-semibold text-[#0B1F4D]">{section.title}</h3>
+              {section.paragraphs.map((paragraph, idx) => (
+                <p key={idx}>
+                  {paragraph.includes('scudetto26@gmail.com') &&
+                  operationalEmail !== 'scudetto26@gmail.com'
+                    ? paragraph.replace(/scudetto26@gmail\.com/g, operationalEmail)
+                    : paragraph}
+                </p>
+              ))}
+            </section>
+          ))}
 
-          <section className="space-y-1.5">
-            <h3 className="font-semibold text-[#0B1F4D]">3. Base giuridica, conservazione e sicurezza</h3>
-            <p>
-              Il trattamento si fonda sul consenso esplicito dell&apos;interessato (art. 6 GDPR). Le candidature sono archiviate su database dedicato Cloud Firestore con regole di sicurezza restrittive:{' '}
-              <strong>nessun elenco o dato personale è reso pubblico</strong> e l&apos;accesso in lettura/gestione è riservato esclusivamente agli amministratori autenticati e autorizzati.
-            </p>
-          </section>
-
-          <section className="space-y-1.5">
-            <h3 className="font-semibold text-[#0B1F4D]">4. Diritti dell&apos;interessato</h3>
-            <p>
-              In qualsiasi momento puoi richiedere l&apos;accesso, la rettifica o la cancellazione della tua candidatura scrivendo a{' '}
-              <a
-                href={`mailto:${operationalEmail}?subject=${encodeURIComponent('Richiesta Privacy FANTA ITALIA CUP')}`}
-                className="font-semibold text-[#0284C7] underline underline-offset-2 hover:text-[#0B1F4D]"
-              >
-                {operationalEmail}
-              </a>
-              .
-            </p>
-          </section>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600">
+            Contatto per richieste di accesso, rettifica o cancellazione dati:{' '}
+            <a
+              href={`mailto:${operationalEmail}?subject=${encodeURIComponent(
+                'Richiesta Privacy GDPR — FANTA ITALIA CUP'
+              )}`}
+              className="font-mono-tabular font-semibold text-[#0284C7] underline underline-offset-2 hover:text-[#0B1F4D]"
+            >
+              {operationalEmail}
+            </a>
+          </div>
         </div>
 
         <div className="px-5 sm:px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end">

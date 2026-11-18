@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Regola predefinita di sicurezza: nega ogni accesso non esplicitamente consentito.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isAllowedAdminRole(ruolo) {
+      return ruolo is string && ruolo in ['SUPER_ADMIN', 'STAFF'];
+    }
+
+    function isSignedInVerifiedAdmin() {
+      return request.auth != null &&
+        request.auth.token.email_verified == true &&
+        (
+          (
+            firestore.exists(/databases/(default)/documents/amministratori/$(request.auth.uid)) &&
+            firestore.get(/databases/(default)/documents/amministratori/$(request.auth.uid)).data.attivo == true &&
+            isAllowedAdminRole(firestore.get(/databases/(default)/documents/amministratori/$(request.auth.uid)).data.ruolo)
+          ) ||
+          (
+            request.auth.token.email is string &&
+            firestore.exists(/databases/(default)/documents/amministratori/$(request.auth.token.email)) &&
+            firestore.get(/databases/(default)/documents/amministratori/$(request.auth.token.email)).data.attivo == true &&
+            isAllowedAdminRole(firestore.get(/databases/(default)/documents/amministratori/$(request.auth.token.email)).data.ruolo)
+          )
+        );
+    }
+
+    // Regolamento ufficiale FICUP in PDF:
+    // - lettura (get) pubblica per anteprima/download dei PDF pubblicati (list riservato allo staff)
+    // - caricamento (solo create, nessuna sovrascrittura o cancellazione) riservato a SUPER_ADMIN e STAFF attivi e verificati
+    // - esclusivamente PDF (application/pdf), > 0 byte e <= 15 MB
+    match /documenti_ufficiali/regolamento/{fileName} {
+      allow get: if true;
+      allow list: if isSignedInVerifiedAdmin();
+      allow create: if isSignedInVerifiedAdmin() &&
+        fileName.size() >= 5 &&
+        fileName.size() <= 160 &&
+        request.resource != null &&
+        request.resource.size > 0 &&
+        request.resource.size <= 15 * 1024 * 1024 &&
+        request.resource.contentType == 'application/pdf';
+      allow update, delete: if false;
+    }
+  }
+}

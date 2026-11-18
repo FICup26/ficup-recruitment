@@ -7,6 +7,7 @@ import {
   Copy,
   DoorOpen,
   ExternalLink,
+  FileText,
   Gavel,
   Loader2,
   Lock,
@@ -18,18 +19,29 @@ import {
   Wallet,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useState, type FormEvent } from 'react';
-import { isFirebaseConfigured } from '../lib/firebase';
+import { useEffect, useState, type FormEvent } from 'react';
 import { isAppsScriptConfigured, triggerCandidaturaNotification } from '../lib/appsScriptClient';
+import { isFirebaseConfigured } from '../lib/firebase';
 import {
+  fetchActivePublicDocument,
+  saveAccettazioneDocumentale,
   submitCandidatura,
   validateCandidaturaInput,
   type ConfigurazionePublica,
+  type DocumentoUfficialeRecord,
 } from '../lib/firestore';
 import { parseFirestoreUiError } from '../lib/notifications';
-import type { WaitingRoomPass } from '../lib/waitingRoomStorage';
+import {
+  CHAT_RULES_VERSION,
+  GDPR_PRIVACY_SECTIONS,
+  maskSensitiveWhatsappLinks,
+  OFFICIAL_CHAT_RULES_SECTIONS,
+  REGOLAMENTO_FALLBACK_VERSION,
+} from '../lib/officialDocuments';
+import { loadWaitingRoomPass, type WaitingRoomPass } from '../lib/waitingRoomStorage';
 import { FicupLogo } from './FicupLogo';
 import { PrivacyModal } from './PrivacyModal';
+import { RegulationContentView } from './RegulationContentView';
 
 interface RecruitmentWizardProps {
   config: Omit<ConfigurazionePublica, 'updatedAt' | 'updatedBy'>;
@@ -39,22 +51,21 @@ interface RecruitmentWizardProps {
 }
 
 const STEP_LABELS = [
-  'Presentazione',
-  'Candidatura',
-  'Invio',
-  'WhatsApp provvisorio',
-  'Attesa invito',
-  'Completamento',
-  'Community ufficiale',
+  'Dati',
+  'Privacy GDPR',
+  'Regolamento',
+  'Regole Chat',
+  'Riepilogo e Invio',
+  'Prossimi Passaggi',
 ] as const;
 
 const COMPLETION_TASKS = [
-  'Apri il link di invito ricevuto via email da Fantaleghe.',
-  'Completa il login o la registrazione su Fantaleghe.',
-  'Accedi alla competizione ufficiale FICUP 26/27.',
-  'Modifica liberamente tutta la rosa con i 250 crediti in Asta Libera.',
-  'Imposta il nuovo nome personalizzato della tua squadra.',
-  'Avvisa lo staff sul gruppo WhatsApp provvisorio appena hai terminato.',
+  'Attendi la conferma di approvazione nella tua Area Personale.',
+  'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
+  'Completa il login o la registrazione su Fantaleghe e accedi a FICUP 26/27.',
+  'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
+  'Avvisa lo staff sul gruppo WhatsApp provvisorio indicando il tuo codice FICUP26.',
+  'Una volta verificato dallo staff, entra nel Gruppo WhatsApp Ufficiale dalla tua Area Personale.',
 ];
 
 export function RecruitmentWizard({
@@ -66,25 +77,41 @@ export function RecruitmentWizard({
   const [step, setStep] = useState<number>(1);
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
 
-  // Step 2 Form State
+  // Remote official documents (Regolamento testuale & optional Chat Rules text override)
+  const [docsLoading, setDocsLoading] = useState(true);
+  const [activeRegolamento, setActiveRegolamento] = useState<DocumentoUfficialeRecord | null>(null);
+  const [activeChatRulesDoc, setActiveChatRulesDoc] = useState<DocumentoUfficialeRecord | null>(null);
+
+  // Step 1 Form State
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
   const [emailFantaleghe, setEmailFantaleghe] = useState('');
   const [nomeSquadra, setNomeSquadra] = useState('');
   const [note, setNote] = useState('');
-  const [consensoPrivacy, setConsensoPrivacy] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [reviewMode, setReviewMode] = useState(false);
+  const [step1Error, setStep1Error] = useState<string | null>(null);
+  const [duplicateLocalWarning, setDuplicateLocalWarning] = useState<string | null>(null);
 
-  // Step 3 Submission State
+  // Mandatory Document Consents (Steps 2, 3, 4)
+  const [consensoPrivacy, setConsensoPrivacy] = useState(false);
+  const [step2Error, setStep2Error] = useState<string | null>(null);
+
+  const [consensoRegolamento, setConsensoRegolamento] = useState(false);
+  const [step3Error, setStep3Error] = useState<string | null>(null);
+
+  const [consensoRegoleChat, setConsensoRegoleChat] = useState(false);
+  const [step4Error, setStep4Error] = useState<string | null>(null);
+
+  // Step 5 Submission State
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [acceptSyncWarning, setAcceptSyncWarning] = useState<string | null>(null);
   const [submittedRecord, setSubmittedRecord] = useState<{
     id: string;
     codiceCandidatura: string;
     emailFantaleghe: string;
     nomeSquadra: string;
     nomeCompleto: string;
+    submittedAtIso: string;
   } | null>(null);
   const [emailDispatchState, setEmailDispatchState] = useState<
     'idle' | 'sending' | 'triggered' | 'scheduled_only' | 'unconfigured'
@@ -96,6 +123,47 @@ export function RecruitmentWizard({
     COMPLETION_TASKS.map(() => false)
   );
 
+  useEffect(() => {
+    let cancelled = false;
+    setDocsLoading(true);
+    Promise.all([
+      fetchActivePublicDocument('regolamento_attivo'),
+      fetchActivePublicDocument('regole_chat_attive'),
+    ])
+      .then(([regDoc, chatDoc]) => {
+        if (!cancelled) {
+          setActiveRegolamento(regDoc);
+          setActiveChatRulesDoc(chatDoc);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDocsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Local device duplicate-email check (never reads public candidature collection)
+  useEffect(() => {
+    const cleanEmail = emailFantaleghe.trim().toLowerCase();
+    if (!cleanEmail) {
+      setDuplicateLocalWarning(null);
+      return;
+    }
+    const existingPass = loadWaitingRoomPass();
+    if (existingPass && existingPass.emailFantaleghe.trim().toLowerCase() === cleanEmail) {
+      setDuplicateLocalWarning(
+        `Su questo dispositivo risulta già registrata una candidatura con questa email (${existingPass.codiceCandidatura}). Se vuoi controllare lo stato invece di inviarne una nuova, accedi all'Area Personale.`
+      );
+    } else {
+      setDuplicateLocalWarning(null);
+    }
+  }, [emailFantaleghe]);
+
   const progressPercent = Math.round((step / STEP_LABELS.length) * 100);
   const isSubmitted = submittedRecord !== null;
   const emailValidHint =
@@ -103,9 +171,13 @@ export function RecruitmentWizard({
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailFantaleghe.trim());
   const squadValidHint = nomeSquadra.trim().length >= 2;
 
-  const handleValidateAndPreview = (e: FormEvent) => {
+  const regolamentoVersionLabel = activeRegolamento?.versione || REGOLAMENTO_FALLBACK_VERSION;
+  const regolamentoDocIdLabel = activeRegolamento?.id || 'in_attesa_pubblicazione';
+  const chatRulesVersionLabel = activeChatRulesDoc?.versione || CHAT_RULES_VERSION;
+
+  const handleStep1Next = (e: FormEvent) => {
     e.preventDefault();
-    setFormError(null);
+    setStep1Error(null);
     try {
       validateCandidaturaInput({
         nome,
@@ -113,17 +185,52 @@ export function RecruitmentWizard({
         emailFantaleghe,
         nomeSquadra,
         note,
-        consensoPrivacy,
+        consensoPrivacy: true, // checked explicitly at Step 2
         versioneInformativa: config.versioneInformativa,
       });
-      setReviewMode(true);
+      setStep(2);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Controlla i campi inseriti.');
+      setStep1Error(err instanceof Error ? err.message : 'Controlla i campi inseriti.');
     }
+  };
+
+  const handleStep2Next = () => {
+    setStep2Error(null);
+    if (!consensoPrivacy) {
+      setStep2Error(
+        'Per proseguire devi leggere e accettare l’Informativa Privacy GDPR FICUP.'
+      );
+      return;
+    }
+    setStep(3);
+  };
+
+  const handleStep3Next = () => {
+    setStep3Error(null);
+    if (!consensoRegolamento) {
+      setStep3Error(
+        'Per proseguire devi confermare di aver preso visione del Regolamento ufficiale FICUP 26/27.'
+      );
+      return;
+    }
+    setStep(4);
+  };
+
+  const handleStep4Next = () => {
+    setStep4Error(null);
+    if (!consensoRegoleChat) {
+      setStep4Error(
+        'Per proseguire devi accettare le Regole della Chat WhatsApp Ufficiale FICUP.'
+      );
+      return;
+    }
+    setStep(5);
   };
 
   const handleRealSubmit = async () => {
     setSubmitError(null);
+    setAcceptSyncWarning(null);
+
     if (!config.iscrizioniAperte) {
       setSubmitError('Le candidature risultano momentaneamente chiuse dallo staff.');
       return;
@@ -134,8 +241,13 @@ export function RecruitmentWizard({
       );
       return;
     }
+    if (!consensoPrivacy || !consensoRegolamento || !consensoRegoleChat) {
+      setSubmitError(
+        'Tutte le accettazioni documentali (Privacy GDPR, Regolamento ufficiale e Regole Chat WhatsApp) sono obbligatorie prima dell’invio.'
+      );
+      return;
+    }
 
-    setStep(3);
     setSubmitting(true);
     try {
       const clean = validateCandidaturaInput({
@@ -149,6 +261,29 @@ export function RecruitmentWizard({
       });
 
       const result = await submitCandidatura(clean);
+      const submittedAtIso = new Date().toISOString();
+
+      let accettazioneSyncedOnFirestore = false;
+      try {
+        accettazioneSyncedOnFirestore = await saveAccettazioneDocumentale({
+          candidaturaId: result.id,
+          codiceCandidatura: result.codiceCandidatura,
+          emailFantaleghe: clean.emailFantaleghe,
+          privacyAccettata: true,
+          versionePrivacy: config.versioneInformativa,
+          regolamentoAccettato: true,
+          versioneRegolamento: regolamentoVersionLabel,
+          regolamentoDocId: regolamentoDocIdLabel,
+          regoleChatAccettate: true,
+          versioneRegoleChat: chatRulesVersionLabel,
+        });
+      } catch (accErr) {
+        const msg = parseFirestoreUiError(accErr);
+        setAcceptSyncWarning(
+          `Nota tecnica: candidatura salvata con successo, ma il registro separato "accettazioni_documenti" non è stato sincronizzato (${msg}).`
+        );
+      }
+
       const nomeCompleto = `${clean.nome} ${clean.cognome}`;
       setSubmittedRecord({
         id: result.id,
@@ -156,14 +291,23 @@ export function RecruitmentWizard({
         emailFantaleghe: clean.emailFantaleghe,
         nomeSquadra: clean.nomeSquadra,
         nomeCompleto,
+        submittedAtIso,
       });
+
       onCandidaturaSubmitted?.({
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
         nomeSquadra: clean.nomeSquadra,
         nomeCompleto,
-        submittedAtIso: new Date().toISOString(),
+        submittedAtIso,
+        acceptedDocs: {
+          versionePrivacy: config.versioneInformativa,
+          versioneRegolamento: regolamentoVersionLabel,
+          versioneRegoleChat: chatRulesVersionLabel,
+          acceptedAtIso: submittedAtIso,
+          accettazioneSyncedOnFirestore,
+        },
       });
 
       if (!isAppsScriptConfigured) {
@@ -194,7 +338,7 @@ export function RecruitmentWizard({
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 2000);
     } catch {
-      // Clipboard blocked in restricted context: ignore gracefully
+      // Ignore clipboard error
     }
   };
 
@@ -203,11 +347,26 @@ export function RecruitmentWizard({
   };
 
   const canVisitStep = (targetStep: number): boolean => {
-    if (targetStep <= 2) {
-      return true;
+    if (targetStep === 1) {
+      return !isSubmitted;
+    }
+    if (targetStep === 2) {
+      return (
+        !isSubmitted &&
+        nome.trim().length >= 1 &&
+        cognome.trim().length >= 1 &&
+        emailValidHint &&
+        squadValidHint
+      );
     }
     if (targetStep === 3) {
-      return isSubmitted || submitting || submitError !== null;
+      return !isSubmitted && consensoPrivacy;
+    }
+    if (targetStep === 4) {
+      return !isSubmitted && consensoPrivacy && consensoRegolamento;
+    }
+    if (targetStep === 5) {
+      return isSubmitted || (consensoPrivacy && consensoRegolamento && consensoRegoleChat);
     }
     return isSubmitted;
   };
@@ -253,11 +412,11 @@ export function RecruitmentWizard({
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-7 gap-1 sm:gap-2">
+          <div className="mt-4 grid grid-cols-6 gap-1 sm:gap-2">
             {STEP_LABELS.map((label, idx) => {
               const stepNum = idx + 1;
               const active = step === stepNum;
-              const completed = step > stepNum || (stepNum === 3 && isSubmitted);
+              const completed = step > stepNum || (stepNum === 5 && isSubmitted);
               const unlocked = canVisitStep(stepNum);
               return (
                 <button
@@ -265,7 +424,7 @@ export function RecruitmentWizard({
                   type="button"
                   disabled={!unlocked}
                   onClick={() => unlocked && setStep(stepNum)}
-                  title={`Step ${stepNum}: ${label}`}
+                  title={`Passaggio ${stepNum}: ${label}`}
                   className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl px-1 py-1.5 text-center transition-all ${
                     active
                       ? 'bg-[#0B1F4D] text-white shadow-xs'
@@ -289,353 +448,535 @@ export function RecruitmentWizard({
         {/* Main Step Card */}
         <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-8 shadow-sm">
           <AnimatePresence mode="wait">
-            {/* STEP 1 — PRESENTAZIONE */}
+            {/* STEP 1 — PRESENTAZIONE & DATI CANDIDATO */}
             {step === 1 && (
               <motion.div
                 key="step-1"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
+                transition={{ duration: 0.2 }}
                 className="space-y-6"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                      Step 1 · Presentazione competizione
+                      Passaggio 1 · Presentazione e dati personali
                     </p>
                     <h1 className="mt-1 font-display text-2xl sm:text-3xl font-extrabold text-[#0B1F4D] tracking-tight">
-                      Benvenuto in FANTA ITALIA CUP ({config.stagione})
+                      Candidatura FANTA ITALIA CUP ({config.stagione})
                     </h1>
-                    <p className="mt-2 text-sm sm:text-base text-slate-600 leading-relaxed">
-                      Prima di inviare la tua candidatura, verifica le caratteristiche principali della lega nazionale su Fantaleghe e le modalità di subentro.
+                    <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+                      Lega nazionale gratuita su Fantaleghe. Inserisci i tuoi dati reali: nei passaggi successivi prenderai visione di Informativa Privacy, Regolamento PDF e Regole Chat WhatsApp prima dell&apos;invio.
                     </p>
                   </div>
                   <FicupLogo size="md" className="hidden sm:block shrink-0 ring-1 ring-slate-200 p-1" />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-1.5">
-                    <div className="flex items-center gap-2 text-[#C69214]">
-                      <Trophy className="w-4 h-4" />
-                      <span className="text-xs font-semibold text-slate-500">Partecipazione</span>
-                    </div>
-                    <p className="font-display font-bold text-[#0B1F4D]">Lega 100% gratuita</p>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Nessuna quota d&apos;ingresso. Community nazionale gestita da staff dedicato.
-                    </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
+                    <Trophy className="w-4 h-4 text-[#C69214]" />
+                    <p className="font-bold text-[#0B1F4D]">Quota 0 €</p>
+                    <p className="text-slate-600">Lega 100% gratuita</p>
                   </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-1.5">
-                    <div className="flex items-center gap-2 text-[#0284C7]">
-                      <Wallet className="w-4 h-4" />
-                      <span className="text-xs font-semibold text-slate-500">Formula di mercato</span>
-                    </div>
-                    <p className="font-display font-bold text-[#0B1F4D]">
-                      {config.modalitaMercato} · {config.budgetIniziale} crediti
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
+                    <Wallet className="w-4 h-4 text-[#0284C7]" />
+                    <p className="font-bold text-[#0B1F4D] font-mono-tabular">
+                      {config.budgetIniziale} crediti
                     </p>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Subentri con budget pieno da {config.budgetIniziale} crediti per rifondare la tua squadra.
-                    </p>
+                    <p className="text-slate-600">{config.modalitaMercato}</p>
                   </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-1.5">
-                    <div className="flex items-center gap-2 text-[#0B1F4D]">
-                      <Gavel className="w-4 h-4" />
-                      <span className="text-xs font-semibold text-slate-500">Gestione rosa</span>
-                    </div>
-                    <p className="font-display font-bold text-[#0B1F4D]">Personalizzazione totale</p>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Sostituisci liberamente i giocatori della rosa iniziale secondo la tua strategia.
-                    </p>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
+                    <Gavel className="w-4 h-4 text-[#0B1F4D]" />
+                    <p className="font-bold text-[#0B1F4D]">Rosa libera</p>
+                    <p className="text-slate-600">Personalizzabile</p>
                   </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-1.5">
-                    <div className="flex items-center gap-2 text-[#C69214]">
-                      <Sparkles className="w-4 h-4" />
-                      <span className="text-xs font-semibold text-slate-500">Identità squadra</span>
-                    </div>
-                    <p className="font-display font-bold text-[#0B1F4D]">Cambio nome libero</p>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Puoi rinominare il club subito dopo aver accettato l&apos;invito su Fantaleghe.
-                    </p>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
+                    <Sparkles className="w-4 h-4 text-[#C69214]" />
+                    <p className="font-bold text-[#0B1F4D]">Cambio nome</p>
+                    <p className="text-slate-600">Club personalizzato</p>
                   </div>
                 </div>
 
-                <div className="pt-2 flex flex-col sm:flex-row justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(2)}
-                    disabled={!config.iscrizioniAperte}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] disabled:opacity-50 disabled:cursor-not-allowed transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>
-                      {config.iscrizioniAperte ? 'Compila la candidatura' : 'Iscrizioni chiuse'}
-                    </span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* STEP 2 — MODULO CANDIDATURA + RIEPILOGO */}
-            {step === 2 && (
-              <motion.div
-                key="step-2"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
-                className="space-y-6"
-              >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Step 2 · Dati del fantallenatore
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    {reviewMode ? 'Riepilogo prima dell’invio' : 'Modulo di candidatura'}
-                  </h1>
-                  <p className="mt-1.5 text-sm text-slate-600">
-                    {reviewMode
-                      ? 'Controlla che l’indirizzo email di Fantaleghe e i dati della squadra siano esatti.'
-                      : 'Raccogliamo solo i dati indispensabili per verificare la richiesta e inviarti l’invito su Fantaleghe.'}
-                  </p>
-                </div>
-
-                {formError && (
+                {step1Error && (
                   <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{formError}</span>
+                    <span>{step1Error}</span>
                   </div>
                 )}
 
-                {!reviewMode ? (
-                  <form onSubmit={handleValidateAndPreview} className="space-y-4" noValidate>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label
-                          htmlFor="ficup-nome"
-                          className="block text-xs font-semibold text-slate-700 mb-1.5"
+                {duplicateLocalWarning && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 flex items-start gap-2.5 text-xs sm:text-sm text-amber-950 leading-relaxed">
+                    <AlertCircle className="w-4 h-4 text-[#C69214] shrink-0 mt-0.5" />
+                    <div className="space-y-2">
+                      <p>{duplicateLocalWarning}</p>
+                      {onOpenWaitingRoom && (
+                        <button
+                          type="button"
+                          onClick={onOpenWaitingRoom}
+                          className="text-xs font-bold text-[#0284C7] underline underline-offset-2 hover:text-[#0B1F4D] cursor-pointer"
                         >
-                          Nome *
-                        </label>
-                        <input
-                          id="ficup-nome"
-                          type="text"
-                          required
-                          maxLength={80}
-                          value={nome}
-                          onChange={(e) => setNome(e.target.value)}
-                          placeholder="Es. Marco"
-                          className={inputClass}
-                        />
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="ficup-cognome"
-                          className="block text-xs font-semibold text-slate-700 mb-1.5"
-                        >
-                          Cognome *
-                        </label>
-                        <input
-                          id="ficup-cognome"
-                          type="text"
-                          required
-                          maxLength={80}
-                          value={cognome}
-                          onChange={(e) => setCognome(e.target.value)}
-                          placeholder="Es. Rossi"
-                          className={inputClass}
-                        />
-                      </div>
+                          Apri subito Area Personale
+                        </button>
+                      )}
                     </div>
+                  </div>
+                )}
 
+                <form onSubmit={handleStep1Next} className="space-y-4" noValidate>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label
-                          htmlFor="ficup-email"
-                          className="block text-xs font-semibold text-slate-700"
-                        >
-                          Email utilizzata su Fantaleghe *
-                        </label>
-                        {emailValidHint && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                            <Check className="w-3 h-3" /> Formato valido
-                          </span>
-                        )}
-                      </div>
+                      <label
+                        htmlFor="ficup-nome"
+                        className="block text-xs font-semibold text-slate-700 mb-1.5"
+                      >
+                        Nome *
+                      </label>
                       <input
-                        id="ficup-email"
-                        type="email"
-                        required
-                        maxLength={160}
-                        value={emailFantaleghe}
-                        onChange={(e) => setEmailFantaleghe(e.target.value)}
-                        placeholder="nome.cognome@esempio.it"
-                        className={inputClass}
-                      />
-                      <p className="mt-1 text-xs text-slate-500">
-                        L&apos;invito ufficiale di accesso alla lega verrà inviato a questo indirizzo.
-                      </p>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label
-                          htmlFor="ficup-squadra"
-                          className="block text-xs font-semibold text-slate-700"
-                        >
-                          Nome della squadra attuale *
-                        </label>
-                        {squadValidHint && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                            <Check className="w-3 h-3" /> OK
-                          </span>
-                        )}
-                      </div>
-                      <input
-                        id="ficup-squadra"
+                        id="ficup-nome"
                         type="text"
                         required
                         maxLength={80}
-                        value={nomeSquadra}
-                        onChange={(e) => setNomeSquadra(e.target.value)}
-                        placeholder="Es. Atletico Fantacalcio"
+                        value={nome}
+                        onChange={(e) => setNome(e.target.value)}
+                        placeholder="Es. Marco"
                         className={inputClass}
                       />
                     </div>
 
                     <div>
                       <label
-                        htmlFor="ficup-note"
+                        htmlFor="ficup-cognome"
                         className="block text-xs font-semibold text-slate-700 mb-1.5"
                       >
-                        Note facoltative
+                        Cognome *
                       </label>
-                      <textarea
-                        id="ficup-note"
-                        rows={3}
-                        maxLength={1000}
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                        placeholder="Eventuali informazioni utili per lo staff (massimo 1000 caratteri)"
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20 focus:border-[#0B1F4D] transition-all"
+                      <input
+                        id="ficup-cognome"
+                        type="text"
+                        required
+                        maxLength={80}
+                        value={cognome}
+                        onChange={(e) => setCognome(e.target.value)}
+                        placeholder="Es. Rossi"
+                        className={inputClass}
                       />
                     </div>
-
-                    {/* Privacy Consent */}
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2.5">
-                      <label className="flex items-start gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={consensoPrivacy}
-                          onChange={(e) => setConsensoPrivacy(e.target.checked)}
-                          className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] focus:ring-[#0B1F4D] shrink-0"
-                        />
-                        <span className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                          Dichiaro di aver letto e accettato l&apos;informativa sul trattamento dei dati personali (versione{' '}
-                          <span className="font-mono-tabular font-semibold">
-                            {config.versioneInformativa}
-                          </span>
-                          ) esclusivamente per la gestione della candidatura FANTA ITALIA CUP. *
-                        </span>
-                      </label>
-                      <div className="pl-8">
-                        <button
-                          type="button"
-                          onClick={() => setPrivacyModalOpen(true)}
-                          className="text-xs font-semibold text-[#0284C7] underline underline-offset-2 hover:text-[#0B1F4D] cursor-pointer"
-                        >
-                          Leggi l&apos;informativa privacy completa
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setStep(1)}
-                        className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        Indietro
-                      </button>
-                      <button
-                        type="submit"
-                        className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <span>Verifica riepilogo</span>
-                        <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <div className="space-y-5">
-                    <div className="rounded-xl border border-slate-200 divide-y divide-slate-200 bg-slate-50/70">
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Fantallenatore</span>
-                        <span className="text-sm font-semibold text-[#0B1F4D]">
-                          {nome.trim()} {cognome.trim()}
-                        </span>
-                      </div>
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Email Fantaleghe</span>
-                        <span className="text-sm font-semibold text-[#0284C7] break-all">
-                          {emailFantaleghe.trim().toLowerCase()}
-                        </span>
-                      </div>
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Squadra attuale</span>
-                        <span className="text-sm font-semibold text-[#0B1F4D]">
-                          {nomeSquadra.trim()}
-                        </span>
-                      </div>
-                      {note.trim() && (
-                        <div className="p-3.5 sm:px-4 flex flex-col gap-1">
-                          <span className="text-xs font-medium text-slate-500">Note facoltative</span>
-                          <span className="text-sm text-slate-700 whitespace-pre-wrap">
-                            {note.trim()}
-                          </span>
-                        </div>
-                      )}
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Consenso privacy</span>
-                        <span className="text-xs font-semibold text-emerald-700">
-                          Accettato · Informativa v{config.versioneInformativa}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setReviewMode(false)}
-                        className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        Modifica dati
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleRealSubmit}
-                        className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <span>Invia candidatura ufficiale</span>
-                        <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                      </button>
-                    </div>
                   </div>
-                )}
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="ficup-email"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Email utilizzata su Fantaleghe *
+                      </label>
+                      {emailValidHint && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                          <Check className="w-3 h-3" /> Formato valido
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      id="ficup-email"
+                      type="email"
+                      required
+                      maxLength={160}
+                      value={emailFantaleghe}
+                      onChange={(e) => setEmailFantaleghe(e.target.value)}
+                      placeholder="nome.cognome@esempio.it"
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      L&apos;invito ufficiale su Fantaleghe e le notifiche automatiche verranno inviati a questo indirizzo.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="ficup-squadra"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Nome della squadra proposta *
+                      </label>
+                      {squadValidHint && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                          <Check className="w-3 h-3" /> OK
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      id="ficup-squadra"
+                      type="text"
+                      required
+                      maxLength={80}
+                      value={nomeSquadra}
+                      onChange={(e) => setNomeSquadra(e.target.value)}
+                      placeholder="Es. Atletico Fantacalcio"
+                      className={inputClass}
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="ficup-note"
+                      className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    >
+                      Note facoltative per lo staff
+                    </label>
+                    <textarea
+                      id="ficup-note"
+                      rows={3}
+                      maxLength={1000}
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="Esperienza su Fantaleghe, disponibilità o eventuali richieste (max 1000 caratteri)"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20 focus:border-[#0B1F4D] transition-all"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex flex-col sm:flex-row justify-end gap-3">
+                    <button
+                      type="submit"
+                      disabled={!config.iscrizioniAperte}
+                      className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span>
+                        {config.iscrizioniAperte
+                          ? 'Prosegui: Informativa Privacy'
+                          : 'Iscrizioni chiuse'}
+                      </span>
+                      <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                    </button>
+                  </div>
+                </form>
               </motion.div>
             )}
 
-            {/* STEP 3 — INVIO SU FIRESTORE & CODICE UNIVOCO */}
+            {/* STEP 2 — INFORMATIVA PRIVACY GDPR */}
+            {step === 2 && (
+              <motion.div
+                key="step-2"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-6"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+                      Passaggio 2 · Tutela dei dati personali (GDPR)
+                    </p>
+                    <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+                      Informativa Privacy (v{config.versioneInformativa})
+                    </h1>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPrivacyModalOpen(true)}
+                    className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-[#0284C7] hover:bg-slate-50 cursor-pointer"
+                  >
+                    Apri a schermo intero
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 text-xs text-amber-950 leading-relaxed">
+                  <strong>Bozza informativa GDPR:</strong> i campi indicati come{' '}
+                  <span className="font-mono-tabular font-semibold">[DA CONFERMARE]</span> sono
+                  evidenziati in attesa della validazione legale definitiva da parte del Titolare del trattamento.
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5 max-h-72 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+                  {GDPR_PRIVACY_SECTIONS.map((section) => (
+                    <section key={section.id} className="space-y-1">
+                      <h2 className="font-bold text-[#0B1F4D]">{section.title}</h2>
+                      {section.paragraphs.map((p, i) => (
+                        <p key={i}>
+                          {p.includes('scudetto26@gmail.com') &&
+                          config.emailOperativa !== 'scudetto26@gmail.com'
+                            ? p.replace(/scudetto26@gmail\.com/g, config.emailOperativa)
+                            : p}
+                        </p>
+                      ))}
+                    </section>
+                  ))}
+                </div>
+
+                {step2Error && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{step2Error}</span>
+                  </div>
+                )}
+
+                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={consensoPrivacy}
+                    onChange={(e) => {
+                      setConsensoPrivacy(e.target.checked);
+                      if (e.target.checked) setStep2Error(null);
+                    }}
+                    className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
+                  />
+                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+                    Ho letto e accetto l&apos;Informativa sul trattamento dei dati personali (versione{' '}
+                    <strong className="font-mono-tabular">{config.versioneInformativa}</strong>)
+                    per la gestione della candidatura FANTA ITALIA CUP. *
+                  </span>
+                </label>
+
+                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    Indietro
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStep2Next}
+                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <span>Prosegui: Regolamento ufficiale</span>
+                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* STEP 3 — REGOLAMENTO UFFICIALE */}
             {step === 3 && (
               <motion.div
                 key="step-3"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-6"
+              >
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+                    Passaggio 3 · Regolamento ufficiale della competizione
+                  </p>
+                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+                    Regolamento ufficiale FICUP {config.stagione}
+                  </h1>
+                </div>
+
+                {docsLoading ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center space-y-2">
+                    <Loader2 className="w-6 h-6 animate-spin text-[#0B1F4D] mx-auto" />
+                    <p className="text-sm text-slate-600">
+                      Caricamento del Regolamento ufficiale in corso...
+                    </p>
+                  </div>
+                ) : activeRegolamento && activeRegolamento.contenutoTesto.trim() ? (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
+                        <FileText className="w-5 h-5 text-[#C69214]" />
+                      </div>
+                      <div className="text-xs sm:text-sm space-y-0.5 min-w-0">
+                        <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
+                        <p className="text-slate-600 font-mono-tabular text-xs">
+                          Versione {activeRegolamento.versione} · Pubblicato:{' '}
+                          {activeRegolamento.dataPubblicazione || '—'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 max-h-[26rem] overflow-y-auto shadow-xs">
+                      <RegulationContentView content={activeRegolamento.contenutoTesto} />
+                    </div>
+                  </div>
+                ) : activeRegolamento && activeRegolamento.downloadUrl ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
+                        <FileText className="w-5 h-5 text-[#C69214]" />
+                      </div>
+                      <div className="text-xs sm:text-sm space-y-0.5">
+                        <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
+                        <p className="text-slate-600 font-mono-tabular text-xs">
+                          Versione {activeRegolamento.versione} · Pubblicato:{' '}
+                          {activeRegolamento.dataPubblicazione || '—'}
+                        </p>
+                      </div>
+                    </div>
+                    <a
+                      href={activeRegolamento.downloadUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] inline-flex items-center justify-center gap-2 shrink-0"
+                    >
+                      <span>Apri Regolamento</span>
+                      <ExternalLink className="w-4 h-4 text-[#D4AF37]" />
+                    </a>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 sm:p-5 flex items-start gap-3 text-xs sm:text-sm text-amber-950 leading-relaxed">
+                    <FileText className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold text-[#0B1F4D]">
+                        Regolamento ufficiale non ancora pubblicato dallo staff
+                      </p>
+                      <p>
+                        Nessuna versione del Regolamento risulta attualmente attiva in{' '}
+                        <span className="font-mono-tabular">documenti_ufficiali</span>. Per trasparenza
+                        non viene generato alcun testo regolamentare automatico: puoi comunque
+                        completare la candidatura e consultare il regolamento appena verrà pubblicato
+                        dall&apos;Area Staff o richiesto a{' '}
+                        <span className="font-mono-tabular">{config.emailOperativa}</span>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {step3Error && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{step3Error}</span>
+                  </div>
+                )}
+
+                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={consensoRegolamento}
+                    onChange={(e) => {
+                      setConsensoRegolamento(e.target.checked);
+                      if (e.target.checked) setStep3Error(null);
+                    }}
+                    className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
+                  />
+                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+                    Confermo di aver letto e preso visione del Regolamento ufficiale FICUP {config.stagione} (versione{' '}
+                    <strong className="font-mono-tabular">{regolamentoVersionLabel}</strong>). *
+                  </span>
+                </label>
+
+                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStep(2)}
+                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    Indietro
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStep3Next}
+                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <span>Prosegui: Regole Chat WhatsApp</span>
+                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* STEP 4 — REGOLE UFFICIALI CHAT WHATSAPP */}
+            {step === 4 && (
+              <motion.div
+                key="step-4"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-6"
+              >
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+                    Passaggio 4 · Codice di comportamento della community
+                  </p>
+                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+                    Regole Ufficiali Chat WhatsApp FICUP (v{chatRulesVersionLabel})
+                  </h1>
+                  <p className="mt-1.5 text-sm text-slate-600">
+                    Leggi attentamente le regole di comportamento del Gruppo WhatsApp Ufficiale. Il collegamento di ingresso al gruppo resta riservato e si sbloccherà esclusivamente dopo l&apos;approvazione e l&apos;autorizzazione dello staff.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 max-h-80 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+                  {activeChatRulesDoc && activeChatRulesDoc.contenutoTesto.trim() ? (
+                    <div className="whitespace-pre-wrap">
+                      {maskSensitiveWhatsappLinks(activeChatRulesDoc.contenutoTesto)}
+                    </div>
+                  ) : (
+                    OFFICIAL_CHAT_RULES_SECTIONS.map((sec) => (
+                      <section key={sec.id} className="space-y-1">
+                        <h2 className="font-bold text-[#0B1F4D]">{sec.title}</h2>
+                        {sec.paragraphs.map((p, idx) => (
+                          <p key={idx}>{p}</p>
+                        ))}
+                      </section>
+                    ))
+                  )}
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-[#C69214] shrink-0" />
+                    <span>
+                      Link gruppo WhatsApp ufficiale: riservato ai candidati approvati e sbloccato nella tua Area Personale dopo la verifica finale dello staff.
+                    </span>
+                  </div>
+                </div>
+
+                {step4Error && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{step4Error}</span>
+                  </div>
+                )}
+
+                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={consensoRegoleChat}
+                    onChange={(e) => {
+                      setConsensoRegoleChat(e.target.checked);
+                      if (e.target.checked) setStep4Error(null);
+                    }}
+                    className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
+                  />
+                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+                    Accetto integralmente le Regole della Chat WhatsApp Ufficiale FICUP (versione{' '}
+                    <strong className="font-mono-tabular">{chatRulesVersionLabel}</strong>) e mi impegno a rispettarle. *
+                  </span>
+                </label>
+
+                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStep(3)}
+                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    Indietro
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStep4Next}
+                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <span>Prosegui: Riepilogo e Invio</span>
+                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* STEP 5 — RIEPILOGO, INVIO & CONFERMA PRESA IN CARICO */}
+            {step === 5 && (
+              <motion.div
+                key="step-5"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
                 className="space-y-6"
               >
                 {submitting ? (
@@ -645,51 +986,8 @@ export function RecruitmentWizard({
                       Registrazione candidatura in corso...
                     </h1>
                     <p className="text-sm text-slate-600">
-                      Salvataggio sicuro su Cloud Firestore e generazione del tuo codice univoco FICUP26.
+                      Salvataggio sicuro su Cloud Firestore e generazione del codice univoco FICUP26.
                     </p>
-                  </div>
-                ) : submitError ? (
-                  <div className="space-y-5">
-                    <div className="flex items-start gap-3 text-red-800">
-                      <AlertCircle className="w-6 h-6 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-xs font-semibold text-red-700">
-                          Step 3 · Invio non completato
-                        </p>
-                        <h1 className="mt-1 font-display text-xl sm:text-2xl font-bold text-[#0B1F4D]">
-                          Impossibile registrare la candidatura su Firestore
-                        </h1>
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900 leading-relaxed">
-                      {submitError}
-                    </div>
-
-                    <p className="text-xs sm:text-sm text-slate-600">
-                      Nessuna candidatura fittizia è stata creata. Puoi verificare i dati o riprovare l&apos;invio reale verso{' '}
-                      <span className="font-mono-tabular">candidature-ficup</span>.
-                    </p>
-
-                    <div className="flex flex-col-reverse sm:flex-row justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSubmitError(null);
-                          setStep(2);
-                        }}
-                        className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        Torna ai dati
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleRealSubmit}
-                        className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors cursor-pointer"
-                      >
-                        Riprova invio reale
-                      </button>
-                    </div>
                   </div>
                 ) : submittedRecord ? (
                   <div className="space-y-6">
@@ -699,17 +997,17 @@ export function RecruitmentWizard({
                       </div>
                       <div>
                         <p className="text-xs font-semibold text-emerald-700">
-                          Step 3 · Candidatura registrata su Firestore
+                          Candidatura registrata su Cloud Firestore · Stato: NUOVO
                         </p>
                         <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                          Candidatura inviata con successo!
+                          LA TUA CANDIDATURA È STATA RICEVUTA!
                         </h1>
                       </div>
                     </div>
 
                     <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 text-center space-y-2.5">
                       <p className="text-xs font-semibold text-slate-600">
-                        Il tuo codice identificativo univoco
+                        Il tuo codice identificativo univoco (conservalo per l&apos;Area Personale)
                       </p>
                       <p className="font-mono-tabular text-2xl sm:text-3xl font-bold tracking-wider text-[#0B1F4D]">
                         {submittedRecord.codiceCandidatura}
@@ -718,7 +1016,7 @@ export function RecruitmentWizard({
                         <button
                           type="button"
                           onClick={handleCopyCode}
-                          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-amber-300 text-xs font-semibold text-[#0B1F4D] hover:bg-amber-100/50 transition-colors cursor-pointer"
+                          className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-amber-300 text-xs font-semibold text-[#0B1F4D] hover:bg-amber-100/50 transition-colors cursor-pointer"
                         >
                           {copiedCode ? (
                             <>
@@ -737,48 +1035,70 @@ export function RecruitmentWizard({
                           <button
                             type="button"
                             onClick={onOpenWaitingRoom}
-                            className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-sky-300 text-xs font-semibold text-[#0284C7] hover:bg-sky-50 transition-colors cursor-pointer"
+                            className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-sky-300 text-xs font-semibold text-[#0284C7] hover:bg-sky-50 transition-colors cursor-pointer"
                           >
                             <DoorOpen className="w-3.5 h-3.5" />
-                            <span>Apri Waiting Room</span>
+                            <span>Apri Area Personale</span>
                           </button>
                         )}
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 space-y-1">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 space-y-1.5">
                       <p>
-                        <strong>Candidato:</strong> {submittedRecord.nomeCompleto}
+                        <strong>Fantallenatore:</strong> {submittedRecord.nomeCompleto}
                       </p>
                       <p className="break-all">
                         <strong>Email Fantaleghe:</strong> {submittedRecord.emailFantaleghe}
                       </p>
                       <p>
-                        <strong>Squadra:</strong> {submittedRecord.nomeSquadra}
+                        <strong>Squadra proposta:</strong> {submittedRecord.nomeSquadra}
+                      </p>
+                      <p className="text-xs font-mono-tabular text-slate-500 pt-1">
+                        Documenti accettati: Privacy v{config.versioneInformativa} · Regolamento v
+                        {regolamentoVersionLabel} · Regole Chat v{chatRulesVersionLabel}
                       </p>
                     </div>
+
+                    {acceptSyncWarning && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-950">
+                        {acceptSyncWarning}
+                      </div>
+                    )}
 
                     <div className="rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-600 leading-relaxed">
                       <strong>Comunicazioni email:</strong>{' '}
                       {emailDispatchState === 'unconfigured' ? (
                         <>
-                          l&apos;endpoint automatico Google Apps Script non è ancora collegato in questo ambiente (<span className="font-mono-tabular">VITE_APPS_SCRIPT_WEBAPP_URL</span>). Prosegui nel gruppo WhatsApp provvisorio allo Step 4 o scrivi a{' '}
-                          <span className="font-mono-tabular text-[#0B1F4D]">{config.emailOperativa}</span>.
+                          l&apos;endpoint Google Apps Script non è ancora collegato in questo ambiente (<span className="font-mono-tabular">VITE_APPS_SCRIPT_WEBAPP_URL</span>). Prosegui nel passaggio successivo o scrivi a{' '}
+                          <span className="font-mono-tabular text-[#0B1F4D]">
+                            {config.emailOperativa}
+                          </span>
+                          .
                         </>
                       ) : emailDispatchState === 'sending' ? (
                         <>
                           invio notifica automatica al backend <span className="font-mono-tabular">FICUP 26/27</span> in corso verso{' '}
-                          <span className="font-mono-tabular text-[#0B1F4D]">{submittedRecord.emailFantaleghe}</span> e lo staff (<span className="font-mono-tabular">{config.emailOperativa}</span>)...
+                          <span className="font-mono-tabular text-[#0B1F4D]">
+                            {submittedRecord.emailFantaleghe}
+                          </span>{' '}
+                          e lo staff (<span className="font-mono-tabular">{config.emailOperativa}</span>)...
                         </>
                       ) : emailDispatchState === 'triggered' ? (
                         <>
-                          richiesta email automatica presa in carico dal backend <span className="font-mono-tabular">FICUP 26/27</span> verso{' '}
-                          <span className="font-mono-tabular text-[#0B1F4D]">{submittedRecord.emailFantaleghe}</span> e notifica staff (<span className="font-mono-tabular">{config.emailOperativa}</span>). Controlla anche Spam o Promozioni.
+                          notifica email presa in carico dal backend <span className="font-mono-tabular">FICUP 26/27</span> verso{' '}
+                          <span className="font-mono-tabular text-[#0B1F4D]">
+                            {submittedRecord.emailFantaleghe}
+                          </span>{' '}
+                          e lo staff (<span className="font-mono-tabular">{config.emailOperativa}</span>). Controlla anche Spam o Promozioni.
                         </>
                       ) : (
                         <>
-                          candidatura salvata su Firestore; il controllo periodico automatico del backend elaborerà la conferma email verso{' '}
-                          <span className="font-mono-tabular text-[#0B1F4D]">{submittedRecord.emailFantaleghe}</span> e <span className="font-mono-tabular">{config.emailOperativa}</span>.
+                          candidatura salvata su Firestore; il controllo periodico automatico elaborerà la conferma email verso{' '}
+                          <span className="font-mono-tabular text-[#0B1F4D]">
+                            {submittedRecord.emailFantaleghe}
+                          </span>{' '}
+                          e <span className="font-mono-tabular">{config.emailOperativa}</span>.
                         </>
                       )}
                     </div>
@@ -786,173 +1106,160 @@ export function RecruitmentWizard({
                     <div className="flex justify-end">
                       <button
                         type="button"
-                        onClick={() => setStep(4)}
+                        onClick={() => setStep(6)}
                         className="min-h-[48px] w-full sm:w-auto px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <span>Prosegui al gruppo WhatsApp provvisorio</span>
+                        <span>Prosegui: Prossimi passaggi</span>
                         <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="py-8 text-center space-y-4">
-                    <Lock className="w-8 h-8 text-slate-400 mx-auto" />
-                    <p className="text-sm text-slate-600">
-                      Completa prima i dati del modulo allo Step 2 per inviare la candidatura.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setStep(2)}
-                      className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B1F4D] text-white text-sm font-semibold cursor-pointer"
-                    >
-                      Vai allo Step 2
-                    </button>
+                  <div className="space-y-6">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+                        Passaggio 5 · Verifica finale prima dell&apos;invio
+                      </p>
+                      <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+                        Riepilogo candidatura e accettazioni
+                      </h1>
+                      <p className="mt-1.5 text-sm text-slate-600">
+                        Controlla i tuoi dati Fantaleghe e le dichiarazioni accettate prima di confermare l&apos;invio definitivo.
+                      </p>
+                    </div>
+
+                    {submitError && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex items-start gap-2.5 text-sm text-red-900">
+                        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                        <span>{submitError}</span>
+                      </div>
+                    )}
+
+                    <div className="rounded-xl border border-slate-200 divide-y divide-slate-200 bg-slate-50/70">
+                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
+                        <span className="text-xs font-medium text-slate-500">Fantallenatore</span>
+                        <span className="text-sm font-semibold text-[#0B1F4D]">
+                          {nome.trim()} {cognome.trim()}
+                        </span>
+                      </div>
+                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
+                        <span className="text-xs font-medium text-slate-500">Email Fantaleghe</span>
+                        <span className="text-sm font-semibold text-[#0284C7] break-all">
+                          {emailFantaleghe.trim().toLowerCase()}
+                        </span>
+                      </div>
+                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
+                        <span className="text-xs font-medium text-slate-500">Squadra proposta</span>
+                        <span className="text-sm font-semibold text-[#0B1F4D]">
+                          {nomeSquadra.trim()}
+                        </span>
+                      </div>
+                      {note.trim() && (
+                        <div className="p-3.5 sm:px-4 flex flex-col gap-1">
+                          <span className="text-xs font-medium text-slate-500">Note facoltative</span>
+                          <span className="text-sm text-slate-700 whitespace-pre-wrap">
+                            {note.trim()}
+                          </span>
+                        </div>
+                      )}
+                      <div className="p-3.5 sm:px-4 space-y-1 text-xs">
+                        <p className="font-medium text-slate-500">Documenti obbligatori accettati</p>
+                        <p className="font-semibold text-emerald-700">
+                          ✓ Informativa Privacy GDPR (v{config.versioneInformativa})
+                        </p>
+                        <p className="font-semibold text-emerald-700">
+                          ✓ Regolamento Ufficiale FICUP (v{regolamentoVersionLabel})
+                        </p>
+                        <p className="font-semibold text-emerald-700">
+                          ✓ Regole Chat WhatsApp Ufficiale (v{chatRulesVersionLabel})
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setStep(1)}
+                        className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        Modifica dati
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRealSubmit}
+                        className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <span>Invia candidatura ufficiale</span>
+                        <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </motion.div>
             )}
 
-            {/* STEP 4 — GRUPPO WHATSAPP PROVVISORIO */}
-            {step === 4 && (
-              <motion.div
-                key="step-4"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
-                className="space-y-6"
-              >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Step 4 · Coordinamento con lo staff
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Entra nel gruppo WhatsApp provvisorio
-                  </h1>
-                  <p className="mt-2 text-sm sm:text-base text-slate-600 leading-relaxed">
-                    Questo gruppo provvisorio serve esclusivamente per comunicare con lo staff FANTA ITALIA CUP, segnalare eventuali richieste e completare rapidamente la procedura di ingresso nella lega.
-                  </p>
-                </div>
-
-                {submittedRecord && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    Quando scrivi sul gruppo indica il tuo codice candidatura:{' '}
-                    <strong className="font-mono-tabular text-[#0B1F4D]">
-                      {submittedRecord.codiceCandidatura}
-                    </strong>
-                  </div>
-                )}
-
-                <a
-                  href={config.linkWhatsappProvvisorio}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="min-h-[52px] w-full px-6 py-3.5 rounded-xl bg-emerald-700 text-white text-sm sm:text-base font-bold hover:bg-emerald-800 transition-colors inline-flex items-center justify-center gap-2.5 shadow-sm"
-                >
-                  <MessageCircle className="w-5 h-5" />
-                  <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
-                  <ExternalLink className="w-4 h-4 opacity-80" />
-                </a>
-
-                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(3)}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    Rivedi codice candidatura
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStep(5)}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Passaggio successivo: Attesa invito</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* STEP 5 — ATTESA INVITO */}
-            {step === 5 && (
-              <motion.div
-                key="step-5"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
-                className="space-y-6"
-              >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Step 5 · Verifica e invio invito Fantaleghe
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Attendi l&apos;invito ufficiale via email
-                  </h1>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-3">
-                  <div className="flex items-start gap-3">
-                    <Mail className="w-5 h-5 text-[#0B1F4D] shrink-0 mt-0.5" />
-                    <p className="text-sm sm:text-base text-slate-700 leading-relaxed">
-                      Lo staff verificherà la tua candidatura e invierà l&apos;invito ufficiale Fantaleghe all&apos;indirizzo email indicato:{' '}
-                      <strong className="text-[#0B1F4D] break-all">
-                        {submittedRecord?.emailFantaleghe ?? emailFantaleghe}
-                      </strong>
-                      .
-                    </p>
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-600 pl-8">
-                    Controlla anche la cartella Spam o Promozioni della tua casella di posta. Per qualsiasi dubbio scrivi sul gruppo WhatsApp provvisorio oppure a{' '}
-                    <span className="font-mono-tabular">{config.emailOperativa}</span>.
-                  </p>
-                </div>
-
-                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(4)}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    Indietro
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStep(6)}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Cosa fare dopo l&apos;invito</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* STEP 6 — COMPLETAMENTO */}
+            {/* STEP 6 — PROSSIMI PASSAGGI & ACCESSO AREA PERSONALE */}
             {step === 6 && (
               <motion.div
                 key="step-6"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
+                transition={{ duration: 0.2 }}
                 className="space-y-6"
               >
                 <div>
                   <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Step 6 · Azioni su Fantaleghe
+                    Passaggio 6 · Coordinamento e Area Personale
                   </p>
                   <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Completa il tuo ingresso nella competizione
+                    Prossimi passaggi verso la lega
                   </h1>
-                  <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                    Dopo aver ricevuto l&apos;invito Fantaleghe via email, segui questi 6 passaggi in ordine (puoi spuntarli man mano come promemoria):
+                  <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                    Mentre lo staff valuta la tua candidatura ({submittedRecord?.codiceCandidatura ?? 'FICUP26'}), puoi coordinarti nel gruppo WhatsApp provvisorio e monitorare lo stato in tempo reale nella tua Area Personale.
                   </p>
                 </div>
 
+                {/* Provisional WhatsApp Group */}
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-900">
+                    <MessageCircle className="w-5 h-5 text-emerald-700" />
+                    <h2 className="font-display text-base font-bold">
+                      Gruppo WhatsApp Provvisorio (Accoglienza)
+                    </h2>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                    Serve per coordinarti con lo staff durante la verifica. Indica il tuo codice{' '}
+                    <strong className="font-mono-tabular text-[#0B1F4D]">
+                      {submittedRecord?.codiceCandidatura}
+                    </strong>{' '}
+                    quando scrivi in chat.
+                  </p>
+                  <a
+                    href={config.linkWhatsappProvvisorio}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-h-[48px] w-full px-5 py-3 rounded-xl bg-emerald-700 text-white text-sm font-bold hover:bg-emerald-800 transition-colors inline-flex items-center justify-center gap-2"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
+                    <ExternalLink className="w-4 h-4 opacity-80" />
+                  </a>
+                </div>
+
+                {/* Protected Official WhatsApp Notice */}
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-amber-950">
+                  <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>Gruppo WhatsApp Ufficiale:</strong> per sicurezza il collegamento ufficiale resta protetto e si sblocca nell&apos;<strong>Area Personale</strong> esclusivamente dopo l&apos;approvazione e la verifica finale dello staff (stato <span className="font-mono-tabular font-bold">COMPLETATO</span>).
+                  </p>
+                </div>
+
+                {/* Completion Checklist */}
                 <div className="space-y-2.5">
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Promemoria percorso di ingresso
+                  </p>
                   {COMPLETION_TASKS.map((task, idx) => {
                     const checked = checkedTasks[idx];
                     return (
@@ -970,7 +1277,7 @@ export function RecruitmentWizard({
                           onChange={() => toggleChecklist(idx)}
                           className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
                         />
-                        <span className="text-sm leading-snug">
+                        <span className="text-xs sm:text-sm leading-snug">
                           <strong className="font-mono-tabular text-[#0B1F4D] mr-1.5">
                             {idx + 1}.
                           </strong>
@@ -981,90 +1288,34 @@ export function RecruitmentWizard({
                   })}
                 </div>
 
-                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(5)}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    Indietro
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStep(7)}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Vai al gruppo ufficiale</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                  </button>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex items-start gap-2.5 text-xs text-slate-600">
+                  <Mail className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
+                  <span>
+                    Assistenza operativa:{' '}
+                    <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
+                      {config.emailOperativa}
+                    </span>
+                  </span>
                 </div>
-              </motion.div>
-            )}
-
-            {/* STEP 7 — COMMUNITY UFFICIALE (ACCESSO PROTETTO VIA WAITING ROOM) */}
-            {step === 7 && (
-              <motion.div
-                key="step-7"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.22 }}
-                className="space-y-6"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="w-11 h-11 rounded-xl bg-amber-50 border border-amber-200 text-[#C69214] flex items-center justify-center shrink-0">
-                    <ShieldCheck className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                      Step 7 · Accesso alla community ufficiale
-                    </p>
-                    <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                      Sblocco protetto nella Waiting Room
-                    </h1>
-                  </div>
-                </div>
-
-                <p className="text-sm sm:text-base text-slate-700 leading-relaxed">
-                  Per sicurezza, il collegamento diretto al gruppo WhatsApp ufficiale della lega ({config.stagione}) non viene mostrato prima della verifica effettiva dello staff.
-                </p>
-
-                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs sm:text-sm text-amber-950 space-y-2">
-                  <p>
-                    <strong>Come si sblocca il gruppo ufficiale:</strong>
-                  </p>
-                  <p>
-                    Quando lo staff imposterà la tua candidatura su <span className="font-mono-tabular font-bold">COMPLETATO</span> su Firestore, accedendo alla tua <strong>Waiting Room</strong> con codice <span className="font-mono-tabular font-bold">{submittedRecord?.codiceCandidatura ?? 'FICUP26'}</span> ed email Fantaleghe, il pulsante ufficiale si attiverà automaticamente.
-                  </p>
-                </div>
-
-                {onOpenWaitingRoom ? (
-                  <button
-                    type="button"
-                    onClick={onOpenWaitingRoom}
-                    className="min-h-[52px] w-full px-6 py-3.5 rounded-xl bg-[#0B1F4D] text-white text-sm sm:text-base font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2.5 shadow-sm cursor-pointer"
-                  >
-                    <DoorOpen className="w-5 h-5 text-[#D4AF37]" />
-                    <span>APRI LA TUA WAITING ROOM</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                  </button>
-                ) : null}
 
                 <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(6)}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    Rivedi checklist completamento
-                  </button>
                   <button
                     type="button"
                     onClick={onExitToHome}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-slate-300 text-[#0B1F4D] text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-[#0B1F4D] text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     Torna alla homepage
                   </button>
+                  {onOpenWaitingRoom && (
+                    <button
+                      type="button"
+                      onClick={onOpenWaitingRoom}
+                      className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <DoorOpen className="w-4 h-4 text-[#D4AF37]" />
+                      <span>APRI AREA PERSONALE</span>
+                    </button>
+                  )}
                 </div>
               </motion.div>
             )}

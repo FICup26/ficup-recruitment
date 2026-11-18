@@ -1,3 +1,11 @@
+export interface WaitingRoomAcceptedDocs {
+  versionePrivacy: string;
+  versioneRegolamento: string;
+  versioneRegoleChat: string;
+  acceptedAtIso: string;
+  accettazioneSyncedOnFirestore?: boolean;
+}
+
 export interface WaitingRoomPass {
   id: string;
   codiceCandidatura: string;
@@ -5,6 +13,7 @@ export interface WaitingRoomPass {
   emailFantaleghe: string;
   nomeSquadra: string;
   submittedAtIso: string;
+  acceptedDocs?: WaitingRoomAcceptedDocs;
 }
 
 const STORAGE_KEY = 'ficup_waiting_room_pass_v1';
@@ -27,7 +36,7 @@ export function loadWaitingRoomPass(): WaitingRoomPass | null {
       typeof parsed.nomeSquadra === 'string' &&
       typeof parsed.submittedAtIso === 'string'
     ) {
-      return {
+      const result: WaitingRoomPass = {
         id: parsed.id,
         codiceCandidatura: parsed.codiceCandidatura,
         nomeCompleto: parsed.nomeCompleto,
@@ -35,6 +44,15 @@ export function loadWaitingRoomPass(): WaitingRoomPass | null {
         nomeSquadra: parsed.nomeSquadra,
         submittedAtIso: parsed.submittedAtIso,
       };
+      if (
+        parsed.acceptedDocs &&
+        typeof parsed.acceptedDocs.versionePrivacy === 'string' &&
+        typeof parsed.acceptedDocs.versioneRegolamento === 'string' &&
+        typeof parsed.acceptedDocs.versioneRegoleChat === 'string'
+      ) {
+        result.acceptedDocs = parsed.acceptedDocs;
+      }
+      return result;
     }
     return null;
   } catch {

@@ -378,6 +378,201 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "DocumentoUfficiale": {
+      "title": "DocumentoUfficiale",
+      "description": "Versioni PDF del Regolamento ufficiale e testi ufficiali delle Regole Chat WhatsApp.",
+      "type": "object",
+      "properties": {
+        "tipo": {
+          "type": "string",
+          "enum": ["REGOLAMENTO", "REGOLE_CHAT"]
+        },
+        "titolo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "versione": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "dataPubblicazione": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "storagePath": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "downloadUrl": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "fileSizeBytes": {
+          "type": "number"
+        },
+        "contenutoTesto": {
+          "type": "string",
+          "maxLength": 15000
+        },
+        "attivo": {
+          "type": "boolean"
+        },
+        "adminUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "tipo",
+        "titolo",
+        "versione",
+        "dataPubblicazione",
+        "fileName",
+        "storagePath",
+        "downloadUrl",
+        "fileSizeBytes",
+        "contenutoTesto",
+        "attivo",
+        "adminUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AccettazioneDocumentale": {
+      "title": "AccettazioneDocumentale",
+      "description": "Registro immutabile delle accettazioni documentali obbligatorie (Privacy GDPR, Regolamento, Regole Chat) collegate a una candidatura.",
+      "type": "object",
+      "properties": {
+        "candidaturaId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "codiceCandidatura": {
+          "type": "string",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^FICUP26-[A-Z0-9]{6}$"
+        },
+        "emailFantaleghe": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "privacyAccettata": { "type": "boolean" },
+        "versionePrivacy": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "regolamentoAccettato": { "type": "boolean" },
+        "versioneRegolamento": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "regolamentoDocId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "regoleChatAccettate": { "type": "boolean" },
+        "versioneRegoleChat": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "candidaturaId",
+        "codiceCandidatura",
+        "emailFantaleghe",
+        "privacyAccettata",
+        "versionePrivacy",
+        "regolamentoAccettato",
+        "versioneRegolamento",
+        "regolamentoDocId",
+        "regoleChatAccettate",
+        "versioneRegoleChat",
+        "acceptedAt",
+        "createdAt"
+      ]
+    },
+    "WhatsappGruppo": {
+      "title": "WhatsappGruppo",
+      "description": "Gruppi WhatsApp ufficiali o di categoria configurati dallo staff (accesso riservato).",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "categoria": {
+          "type": "string",
+          "enum": ["UFFICIALE", "CATEGORIA", "PROVVISORIO", "ALTRO"]
+        },
+        "descrizione": { "type": "string", "maxLength": 400 },
+        "squadraAssociata": { "type": "string", "maxLength": 100 },
+        "linkInvito": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://chat\\.whatsapp\\.com/.+",
+          "maxLength": 300
+        },
+        "attivo": { "type": "boolean" },
+        "updatedBy": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "nome",
+        "categoria",
+        "descrizione",
+        "squadraAssociata",
+        "linkInvito",
+        "attivo",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WhatsappAutorizzazione": {
+      "title": "WhatsappAutorizzazione",
+      "description": "Stato autorizzazione WhatsApp e riferimento squadra per singola candidatura (riservato staff).",
+      "type": "object",
+      "properties": {
+        "candidaturaId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "codiceCandidatura": {
+          "type": "string",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^FICUP26-[A-Z0-9]{6}$"
+        },
+        "statoAutorizzazione": {
+          "type": "string",
+          "enum": ["NON_AUTORIZZATO", "IN_ATTESA", "AUTORIZZATO", "REVOCATO"]
+        },
+        "gruppoId": { "type": "string", "maxLength": 128 },
+        "gruppoNome": { "type": "string", "maxLength": 120 },
+        "linkAssegnato": { "type": "string", "maxLength": 300 },
+        "squadraAssegnataZonaVar": { "type": "string", "maxLength": 120 },
+        "autorizzatoDaEmail": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "candidaturaId",
+        "codiceCandidatura",
+        "statoAutorizzazione",
+        "gruppoId",
+        "gruppoNome",
+        "linkAssegnato",
+        "squadraAssegnataZonaVar",
+        "autorizzatoDaEmail",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -410,6 +605,30 @@
         "$ref": "#/entities/EmailLog"
       },
       "description": "Registro idempotente degli invii email gestiti da Google Apps Script."
+    },
+    "/documenti_ufficiali/{docId}": {
+      "schema": {
+        "$ref": "#/entities/DocumentoUfficiale"
+      },
+      "description": "Versioni del Regolamento ufficiale PDF e Regole Chat WhatsApp. Solo i puntatori attivi 'regolamento_attivo' e 'regole_chat_attive' sono leggibili pubblicamente via get."
+    },
+    "/accettazioni_documenti/{candidaturaId}": {
+      "schema": {
+        "$ref": "#/entities/AccettazioneDocumentale"
+      },
+      "description": "Accettazioni documentali obbligatorie immutabili associate alle candidature."
+    },
+    "/whatsapp_gruppi/{groupId}": {
+      "schema": {
+        "$ref": "#/entities/WhatsappGruppo"
+      },
+      "description": "Elenco riservato allo staff dei gruppi WhatsApp ufficiali e di categoria."
+    },
+    "/whatsapp_autorizzazioni/{candidaturaId}": {
+      "schema": {
+        "$ref": "#/entities/WhatsappAutorizzazione"
+      },
+      "description": "Autorizzazioni di accesso WhatsApp e riferimenti squadra riservati allo staff."
     }
   }
 }
