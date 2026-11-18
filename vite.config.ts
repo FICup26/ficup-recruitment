@@ -14,7 +14,7 @@ export default defineConfig(({mode}) => {
     '';
 
   return {
-    base: '/ficup-recruitment/',
+    base: mode === 'production' ? '/ficup-recruitment/' : '/',
     define: {
       'import.meta.env.VITE_APPS_SCRIPT_WEBAPP_URL': JSON.stringify(appsScriptUrl),
     },

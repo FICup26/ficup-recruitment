@@ -18,6 +18,9 @@ import {
 } from 'lucide-react';
 import { motion, useScroll, useTransform } from 'motion/react';
 import { useRef, useState } from 'react';
+import editorialStadiumImg from '../assets/images/ficup_editorial_stadium_1794899930151.jpg';
+import stadiumHeroImg from '../assets/images/ficup_stadium_hero_1794862341799.jpg';
+import tacticalArenaImg from '../assets/images/ficup_tactical_arena_1794895608683.jpg';
 import type { FirebaseEnvironmentDiagnostics } from '../lib/firebase';
 import type { ConfigurazionePublica } from '../lib/firestore';
 import { FicupLogo } from './FicupLogo';
@@ -309,7 +312,7 @@ export function HomePage({
                 <motion.div style={{ y: photoY }} className="w-full h-[112%] -mt-[4%]">
                   {!heroImgFailed ? (
                     <img
-                      src="/src/assets/images/ficup_editorial_stadium_1794899930151.jpg"
+                      src={editorialStadiumImg}
                       alt="Stadio illuminato dal sole per FANTA ITALIA CUP"
                       onError={() => setHeroImgFailed(true)}
                       className="w-full h-full object-cover"
@@ -452,7 +455,7 @@ export function HomePage({
               <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm aspect-[16/10]">
                 {!storyImgFailed ? (
                   <img
-                    src="/src/assets/images/ficup_stadium_hero_1794862341799.jpg"
+                    src={stadiumHeroImg}
                     alt="Atmosfera serale dello stadio"
                     loading="lazy"
                     onError={() => setStoryImgFailed(true)}
@@ -823,7 +826,7 @@ export function HomePage({
         <div className="absolute inset-0 pointer-events-none opacity-20">
           {!universeImgFailed && (
             <img
-              src="/src/assets/images/ficup_tactical_arena_1794895608683.jpg"
+              src={tacticalArenaImg}
               alt=""
               aria-hidden="true"
               loading="lazy"
