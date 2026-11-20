@@ -244,6 +244,7 @@ export function HomePage({
   const [officialAppLogoFailed, setOfficialAppLogoFailed] = useState(false);
   const [appScreenshotFailed, setAppScreenshotFailed] = useState(false);
   const [heroFischiettoFailed, setHeroFischiettoFailed] = useState(false);
+  const [heroVideoFailed, setHeroVideoFailed] = useState(false);
   const [fischiettoImgFailed, setFischiettoImgFailed] = useState(false);
   const [failedCompetitionLogos, setFailedCompetitionLogos] = useState<Record<string, boolean>>({});
   const prefersReducedMotion = useReducedMotion();
@@ -348,14 +349,31 @@ export function HomePage({
               }
               className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
             >
-              <video
-                src="/assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4"
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none"
-              />
+              {!heroVideoFailed ? (
+                <video
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
+                  onError={() => setHeroVideoFailed(true)}
+                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none bg-slate-900"
+                >
+                  <source
+                    src={`${import.meta.env.BASE_URL}assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4`}
+                    type="video/mp4"
+                  />
+                  Il tuo browser non supporta il tag video.
+                </video>
+              ) : (
+                <img
+                  src={HERO_FISCHIETTO_URL}
+                  alt="Il Fischietto FICUP"
+                  loading="eager"
+                  referrerPolicy="no-referrer"
+                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none"
+                />
+              )}
             </motion.div>
 
             {/* Description + CTAs (Full width on mobile below Title+Image row; Left column on desktop) */}
