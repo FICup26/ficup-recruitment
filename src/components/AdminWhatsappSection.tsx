@@ -249,7 +249,7 @@ export function AdminWhatsappSection({ adminUser, candidature }: AdminWhatsappSe
               maxLength={100}
               value={nome}
               onChange={(e) => setNome(e.target.value)}
-              placeholder="Es. FICUP Ufficiale 26/27"
+              placeholder="Es. FICUP Ufficiale"
               className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
             />
           </div>

@@ -195,7 +195,7 @@ export async function verifyAppsScriptBackend(options?: {
       serviceName: null,
       operationalEmail: null,
       detail:
-        'Variabile VITE_APPS_SCRIPT_WEBAPP_URL non configurata nell’ambiente. Impostarla con l’URL /exec della Web App FICUP 26/27 - Backend e ricompilare il frontend.',
+        'Variabile VITE_APPS_SCRIPT_WEBAPP_URL non configurata nell’ambiente. Impostarla con l’URL /exec della Web App FICUP - Backend e ricompilare il frontend.',
       checkedAtIso,
     };
   }

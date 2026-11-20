@@ -34,7 +34,7 @@ function buildOfficialChatRulesMarkdown(remoteDoc: DocumentoUfficialeRecord | nu
 }
 
 export function RegulationsSection({
-  season = '26/27',
+  season = '',
   operationalEmail = 'scudetto26@gmail.com',
 }: RegulationsSectionProps) {
   const [loading, setLoading] = useState(true);

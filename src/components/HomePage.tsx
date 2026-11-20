@@ -332,12 +332,12 @@ export function HomePage({
 
             {/* Right: Attached Animated Video asset strictly to the RIGHT of the Hero Title on Mobile and Desktop */}
             <motion.div
-              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 28, scale: 0.93 }}
-              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 6 }}
+              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
               transition={
                 prefersReducedMotion
                   ? { duration: 0.3 }
-                  : { duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }
+                  : { duration: 1.8, delay: 0.2, ease: [0.22, 1, 0.36, 1] }
               }
               className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
             >
@@ -349,7 +349,7 @@ export function HomePage({
                   playsInline
                   preload="auto"
                   onError={() => setHeroVideoFailed(true)}
-                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none bg-slate-900"
+                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none bg-slate-900"
                 >
                   <source
                     src={`${import.meta.env.BASE_URL}assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4`}
@@ -363,7 +363,7 @@ export function HomePage({
                   alt="Il Fischietto FICUP"
                   loading="eager"
                   referrerPolicy="no-referrer"
-                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none"
+                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none"
                 />
               )}
             </motion.div>

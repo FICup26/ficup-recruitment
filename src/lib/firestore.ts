@@ -146,7 +146,7 @@ export interface EmailLogRecord {
 }
 
 export const DEFAULT_PUBLIC_CONFIG: Omit<ConfigurazionePublica, 'updatedAt' | 'updatedBy'> = {
-  stagione: '26/27',
+  stagione: 'Ufficiale',
   iscrizioniAperte: true,
   budgetIniziale: 250,
   modalitaMercato: 'ASTA LIBERA',

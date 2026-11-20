@@ -67,7 +67,7 @@ const STEP_LABELS = [
 const COMPLETION_TASKS = [
   'Attendi la conferma di approvazione nella tua Area Personale.',
   'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
-  'Completa il login o la registrazione su Fantaleghe e accedi a FICUP 26/27.',
+  'Completa il login o la registrazione su Fantaleghe e accedi a FICUP.',
   'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
   'Avvisa lo staff sul gruppo WhatsApp provvisorio indicando il tuo codice FICUP26.',
   'Una volta verificato dallo staff, entra nel Gruppo WhatsApp Ufficiale dalla tua Area Personale.',
@@ -229,7 +229,7 @@ export function RecruitmentWizard({
     setStep3Error(null);
     if (!consensoRegolamento) {
       setStep3Error(
-        'Per proseguire devi confermare di aver preso visione del Regolamento ufficiale FICUP 26/27.'
+        'Per proseguire devi confermare di aver preso visione del Regolamento ufficiale FICUP.'
       );
       return;
     }
@@ -1255,7 +1255,7 @@ export function RecruitmentWizard({
                         </>
                       ) : emailDispatchState === 'sending' ? (
                         <>
-                          invio notifica automatica al backend <span className="font-mono-tabular">FICUP 26/27</span> in corso verso{' '}
+                          invio notifica automatica al backend <span className="font-mono-tabular">FICUP</span> in corso verso{' '}
                           <span className="font-mono-tabular text-[#0B1F4D]">
                             {submittedRecord.emailFantaleghe}
                           </span>{' '}
@@ -1263,7 +1263,7 @@ export function RecruitmentWizard({
                         </>
                       ) : emailDispatchState === 'triggered' ? (
                         <>
-                          notifica email presa in carico dal backend <span className="font-mono-tabular">FICUP 26/27</span> verso{' '}
+                          notifica email presa in carico dal backend <span className="font-mono-tabular">FICUP</span> verso{' '}
                           <span className="font-mono-tabular text-[#0B1F4D]">
                             {submittedRecord.emailFantaleghe}
                           </span>{' '}

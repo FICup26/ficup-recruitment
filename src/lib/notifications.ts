@@ -58,7 +58,7 @@ function buildApprovalHtmlEmail(params: {
         <tr>
           <td align="center" style="padding:20px 16px;background-color:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;">
             <p style="margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#14532D;font-weight:bold;">
-              Accesso riservato al Gruppo WhatsApp Ufficiale FICUP 26/27
+              Accesso riservato al Gruppo WhatsApp Ufficiale FICUP
             </p>
             <table role="presentation" cellspacing="0" cellpadding="0" border="0">
               <tr>
@@ -85,10 +85,10 @@ function buildApprovalHtmlEmail(params: {
     <tr>
       <td style="background-color:#0B1F4D;padding:22px 24px;border-bottom:3px solid #C69214;">
         <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1.6px;text-transform:uppercase;color:#FDE68A;">
-          FANTA ITALIA CUP · STAGIONE 26/27
+          FANTA ITALIA CUP · STAGIONE UFFICIALE
         </p>
         <h1 style="margin:6px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.3;color:#FFFFFF;">
-          Benvenuto in FICUP 26/27!
+          Benvenuto in FICUP!
         </h1>
       </td>
     </tr>
@@ -96,7 +96,7 @@ function buildApprovalHtmlEmail(params: {
       <td style="padding:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1E293B;">
         <p style="margin:0 0 14px 0;">Ciao <strong>${safeNome}</strong>,</p>
         <p style="margin:0 0 14px 0;">
-          siamo felici di darti il benvenuto ufficiale in <strong>FICUP 26/27</strong>! La tua candidatura (<strong>${safeCode}</strong>) per la squadra <strong>&ldquo;${safeTeam}&rdquo;</strong> è stata verificata e approvata dallo staff.
+          siamo felici di darti il benvenuto ufficiale in <strong>FICUP</strong>! La tua candidatura (<strong>${safeCode}</strong>) per la squadra <strong>&ldquo;${safeTeam}&rdquo;</strong> è stata verificata e approvata dallo staff.
         </p>
         <p style="margin:0 0 14px 0;">
           A breve riceverai l&apos;invito ufficiale di accesso su Fantaleghe all&apos;indirizzo <strong>${safeEmail}</strong>.
@@ -141,9 +141,9 @@ export function buildNotificationDraft(
     case 'NUOVA_CANDIDATURA_STAFF':
       label = 'Notifica nuova candidatura (Staff)';
       to = operationalEmail;
-      subject = `[FICUP 26/27] Nuova candidatura ${candidatura.codiceCandidatura} - ${fullName}`;
+      subject = `[FICUP] Nuova candidatura ${candidatura.codiceCandidatura} - ${fullName}`;
       body = [
-        `Nuova candidatura ricevuta sul portale FICUP Recruitment 26/27.`,
+        `Nuova candidatura ricevuta sul portale FICUP Recruitment.`,
         ``,
         `Codice: ${candidatura.codiceCandidatura}`,
         `Fantallenatore: ${fullName}`,
@@ -156,11 +156,11 @@ export function buildNotificationDraft(
 
     case 'CONFERMA_RICEZIONE_CANDIDATO':
       label = 'Conferma ricezione candidato';
-      subject = `FICUP 26/27 — Candidatura ricevuta (${candidatura.codiceCandidatura})`;
+      subject = `FICUP — Candidatura ricevuta (${candidatura.codiceCandidatura})`;
       body = [
         `Ciao ${candidatura.nome},`,
         ``,
-        `abbiamo ricevuto correttamente la tua candidatura per la lega nazionale gratuita FICUP 26/27.`,
+        `abbiamo ricevuto correttamente la tua candidatura per la lega nazionale gratuita FICUP.`,
         `Codice identificativo: ${candidatura.codiceCandidatura}`,
         `Squadra indicata: ${candidatura.nomeSquadra}`,
         ``,
@@ -173,11 +173,11 @@ export function buildNotificationDraft(
 
     case 'APPROVAZIONE': {
       label = 'Notifica approvazione e ingresso';
-      subject = `FICUP 26/27 — Candidatura approvata e benvenuto ufficiale (${candidatura.codiceCandidatura})`;
+      subject = `FICUP — Candidatura approvata e benvenuto ufficiale (${candidatura.codiceCandidatura})`;
       const lines = [
         `Ciao ${candidatura.nome},`,
         ``,
-        `benvenuto ufficialmente in FICUP 26/27!`,
+        `benvenuto ufficialmente in FICUP!`,
         `La tua candidatura (${candidatura.codiceCandidatura}) per la squadra "${candidatura.nomeSquadra}" è stata verificata e approvata dallo staff FICUP.`,
         `A breve riceverai l'invito ufficiale di accesso su Fantaleghe a questo indirizzo email (${candidatura.emailFantaleghe}).`,
       ];
@@ -210,11 +210,11 @@ export function buildNotificationDraft(
 
     case 'INVITO_INVIATO':
       label = 'Comunicazione invito inviato';
-      subject = `FICUP 26/27 — Invito Fantaleghe inviato (${candidatura.codiceCandidatura})`;
+      subject = `FICUP — Invito Fantaleghe inviato (${candidatura.codiceCandidatura})`;
       body = [
         `Ciao ${candidatura.nome},`,
         ``,
-        `ti abbiamo inviato l'invito ufficiale per accedere alla competizione FICUP 26/27 su Fantaleghe all'indirizzo ${candidatura.emailFantaleghe}.`,
+        `ti abbiamo inviato l'invito ufficiale per accedere alla competizione FICUP su Fantaleghe all'indirizzo ${candidatura.emailFantaleghe}.`,
         ``,
         `Prossimi passaggi:`,
         `1. Apri il link presente nell'invito Fantaleghe.`,
@@ -228,11 +228,11 @@ export function buildNotificationDraft(
 
     case 'COMPLETAMENTO':
       label = 'Comunicazione completamento';
-      subject = `FICUP 26/27 — Ingresso completato (${candidatura.codiceCandidatura})`;
+      subject = `FICUP — Ingresso completato (${candidatura.codiceCandidatura})`;
       body = [
         `Ciao ${candidatura.nome},`,
         ``,
-        `il tuo ingresso in FICUP 26/27 con la squadra "${candidatura.nomeSquadra}" è stato verificato e completato.`,
+        `il tuo ingresso in FICUP con la squadra "${candidatura.nomeSquadra}" è stato verificato e completato.`,
         `Ora puoi accedere al gruppo WhatsApp ufficiale della community FICUP dalla tua Area Personale.`,
         ``,
         `Buona stagione!`,

@@ -66,7 +66,7 @@ export function AdminDocumentiSection({ adminUser }: AdminDocumentiSectionProps)
 
   // Textual Regulation Editor State
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [titolo, setTitolo] = useState('Regolamento Ufficiale FICUP 26/27');
+  const [titolo, setTitolo] = useState('Regolamento Ufficiale FICUP');
   const [versione, setVersione] = useState('2026.1');
   const [dataPubblicazione, setDataPubblicazione] = useState(() =>
     new Date().toISOString().slice(0, 10)
@@ -150,7 +150,7 @@ export function AdminDocumentiSection({ adminUser }: AdminDocumentiSectionProps)
   };
 
   const handleLoadIntoEditor = (record: DocumentoUfficialeRecord) => {
-    setTitolo(record.titolo || 'Regolamento Ufficiale FICUP 26/27');
+    setTitolo(record.titolo || 'Regolamento Ufficiale FICUP');
     setVersione(suggestNextVersion(record.versione));
     setDataPubblicazione(new Date().toISOString().slice(0, 10));
     setRegText(record.contenutoTesto || '');
@@ -164,7 +164,7 @@ export function AdminDocumentiSection({ adminUser }: AdminDocumentiSectionProps)
   };
 
   const handleResetEditor = () => {
-    setTitolo('Regolamento Ufficiale FICUP 26/27');
+    setTitolo('Regolamento Ufficiale FICUP');
     setVersione('2026.1');
     setDataPubblicazione(new Date().toISOString().slice(0, 10));
     setRegText('');

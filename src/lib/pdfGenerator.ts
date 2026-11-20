@@ -106,7 +106,7 @@ export function downloadOfficialDocumentPdf(input: FicupPdfDocumentInput): void 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9);
       doc.setTextColor(253, 230, 138); // #FDE68A
-      doc.text('FICUP 26/27 · FANTA ITALIA CUP — DOCUMENTO UFFICIALE', marginX, 11);
+      doc.text('FICUP · FANTA ITALIA CUP — DOCUMENTO UFFICIALE', marginX, 11);
 
       doc.setFontSize(16);
       doc.setTextColor(255, 255, 255);
@@ -255,7 +255,7 @@ export function downloadOfficialDocumentPdf(input: FicupPdfDocumentInput): void 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
-    doc.text('FANTA ITALIA CUP · Stagione 26/27 · Documento ufficiale', marginX, pageHeight - 9);
+    doc.text('FANTA ITALIA CUP · Documento ufficiale', marginX, pageHeight - 9);
     doc.text(`Pagina ${i} di ${totalPages}`, pageWidth - marginX, pageHeight - 9, {
       align: 'right',
     });

@@ -23,7 +23,7 @@ export const GDPR_PRIVACY_SECTIONS: LegalDocumentSection[] = [
     id: 'dati-raccolti',
     title: '2. Tipologia di dati personali raccolti (minimizzazione)',
     paragraphs: [
-      'Il portale raccoglie esclusivamente i dati strettamente necessari per valutare e gestire la richiesta di partecipazione alla lega gratuita FICUP 26/27: Nome, Cognome, indirizzo email utilizzato su Fantaleghe, numero di cellulare (+39), nome della squadra proposta, eventuali note facoltative inserite dal candidato.',
+      'Il portale raccoglie esclusivamente i dati strettamente necessari per valutare e gestire la richiesta di partecipazione alla lega gratuita FICUP: Nome, Cognome, indirizzo email utilizzato su Fantaleghe, numero di cellulare (+39), nome della squadra proposta, eventuali note facoltative inserite dal candidato.',
       'Vengono inoltre registrati il codice identificativo univoco della candidatura (formato FICUP26-XXXXXX), i timestamp di invio/aggiornamento e la prova tecnica dell’accettazione di Informativa Privacy, Regolamento ufficiale e Regole della Chat WhatsApp Ufficiale (versione documento e data/ora di conferma).',
     ],
   },
@@ -49,7 +49,7 @@ export const GDPR_PRIVACY_SECTIONS: LegalDocumentSection[] = [
     needsConfirmation: true,
     paragraphs: [
       'Trasferimenti extra-UE: [DA CONFERMARE — indicazione delle eventuali garanzie/Clausole Contrattuali Standard applicate dai fornitori cloud Google LLC e Meta Platforms per eventuali trattamenti fuori dallo Spazio Economico Europeo].',
-      'Periodo di conservazione: [DA CONFERMARE — i dati della candidatura saranno conservati per il tempo necessario alla gestione del reclutamento e per la durata della stagione sportiva FICUP 26/27, salvo precedente richiesta di cancellazione o obblighi organizzativi di storico].',
+      'Periodo di conservazione: [DA CONFERMARE — i dati della candidatura saranno conservati per il tempo necessario alla gestione del reclutamento e per la durata della stagione sportiva FICUP, salvo precedente richiesta di cancellazione o obblighi organizzativi di storico].',
     ],
   },
   {
