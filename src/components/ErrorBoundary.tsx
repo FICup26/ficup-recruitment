@@ -46,7 +46,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               </div>
               <div>
                 <p className="text-xs font-semibold text-[#C69214]">
-                  FANTA ITALIA CUP · THE FOOTBALL UNIVERSE
+                  FANTA ITALIA CUP · L&apos;universo del Fantacalcio
                 </p>
                 <h1 className="font-display text-lg font-bold text-[#0B1F4D]">
                   Si è verificato un errore applicativo

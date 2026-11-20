@@ -23,7 +23,7 @@ export const GDPR_PRIVACY_SECTIONS: LegalDocumentSection[] = [
     id: 'dati-raccolti',
     title: '2. Tipologia di dati personali raccolti (minimizzazione)',
     paragraphs: [
-      'Il portale raccoglie esclusivamente i dati strettamente necessari per valutare e gestire la richiesta di partecipazione alla lega gratuita FICUP 26/27: Nome, Cognome, indirizzo email utilizzato su Fantaleghe, nome della squadra proposta, eventuali note facoltative inserite dal candidato.',
+      'Il portale raccoglie esclusivamente i dati strettamente necessari per valutare e gestire la richiesta di partecipazione alla lega gratuita FICUP 26/27: Nome, Cognome, indirizzo email utilizzato su Fantaleghe, numero di cellulare (+39), nome della squadra proposta, eventuali note facoltative inserite dal candidato.',
       'Vengono inoltre registrati il codice identificativo univoco della candidatura (formato FICUP26-XXXXXX), i timestamp di invio/aggiornamento e la prova tecnica dell’accettazione di Informativa Privacy, Regolamento ufficiale e Regole della Chat WhatsApp Ufficiale (versione documento e data/ora di conferma).',
     ],
   },
@@ -31,7 +31,7 @@ export const GDPR_PRIVACY_SECTIONS: LegalDocumentSection[] = [
     id: 'finalita-base',
     title: '3. Finalità e base giuridica del trattamento',
     paragraphs: [
-      'Finalità: valutazione della candidatura da parte dello staff FICUP, invio delle comunicazioni di servizio sullo stato della richiesta, predisposizione dell’invito di accesso su Fantaleghe, coordinamento nei gruppi WhatsApp dedicati e verifica del rispetto del regolamento della community.',
+      'Finalità: valutazione della candidatura da parte dello staff FICUP, invio delle comunicazioni di servizio sullo stato della richiesta, predisposizione dell’invito di accesso su Fantaleghe, utilizzo del numero di cellulare per consentire l’accesso al gruppo WhatsApp ufficiale e per le comunicazioni organizzative della lega, nonché verifica del rispetto del regolamento della community.',
       'Base giuridica: consenso esplicito dell’interessato espresso prima dell’invio della candidatura (art. 6, par. 1, lett. a GDPR) ed esecuzione di misure precontrattuali/organizzative richieste dall’interessato per l’ammissione alla competizione (art. 6, par. 1, lett. b GDPR).',
     ],
   },

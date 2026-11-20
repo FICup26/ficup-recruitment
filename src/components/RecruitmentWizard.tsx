@@ -6,13 +6,16 @@ import {
   CheckCircle2,
   Copy,
   DoorOpen,
+  Download,
   ExternalLink,
   FileText,
   Gavel,
+  Hourglass,
   Loader2,
   Lock,
   Mail,
   MessageCircle,
+  Phone,
   ShieldCheck,
   Sparkles,
   Trophy,
@@ -24,6 +27,7 @@ import { isAppsScriptConfigured, triggerCandidaturaNotification } from '../lib/a
 import { isFirebaseConfigured } from '../lib/firebase';
 import {
   fetchActivePublicDocument,
+  normalizeAndValidateItalianPhone,
   saveAccettazioneDocumentale,
   submitCandidatura,
   validateCandidaturaInput,
@@ -38,6 +42,7 @@ import {
   OFFICIAL_CHAT_RULES_SECTIONS,
   REGOLAMENTO_FALLBACK_VERSION,
 } from '../lib/officialDocuments';
+import { downloadOfficialDocumentPdf } from '../lib/pdfGenerator';
 import { loadWaitingRoomPass, type WaitingRoomPass } from '../lib/waitingRoomStorage';
 import { FicupLogo } from './FicupLogo';
 import { PrivacyModal } from './PrivacyModal';
@@ -86,6 +91,7 @@ export function RecruitmentWizard({
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
   const [emailFantaleghe, setEmailFantaleghe] = useState('');
+  const [cellulare, setCellulare] = useState('');
   const [nomeSquadra, setNomeSquadra] = useState('');
   const [note, setNote] = useState('');
   const [step1Error, setStep1Error] = useState<string | null>(null);
@@ -97,18 +103,21 @@ export function RecruitmentWizard({
 
   const [consensoRegolamento, setConsensoRegolamento] = useState(false);
   const [step3Error, setStep3Error] = useState<string | null>(null);
+  const [pdfFeedback, setPdfFeedback] = useState<string | null>(null);
 
   const [consensoRegoleChat, setConsensoRegoleChat] = useState(false);
   const [step4Error, setStep4Error] = useState<string | null>(null);
 
   // Step 5 Submission State
   const [submitting, setSubmitting] = useState(false);
+  const [submitStage, setSubmitStage] = useState<'verifying' | 'saving'>('verifying');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [acceptSyncWarning, setAcceptSyncWarning] = useState<string | null>(null);
   const [submittedRecord, setSubmittedRecord] = useState<{
     id: string;
     codiceCandidatura: string;
     emailFantaleghe: string;
+    cellulare: string;
     nomeSquadra: string;
     nomeCompleto: string;
     submittedAtIso: string;
@@ -169,6 +178,15 @@ export function RecruitmentWizard({
   const emailValidHint =
     emailFantaleghe.trim().length > 0 &&
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailFantaleghe.trim());
+  const phoneValidHint = (() => {
+    try {
+      if (!cellulare.trim()) return false;
+      normalizeAndValidateItalianPhone(cellulare);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   const squadValidHint = nomeSquadra.trim().length >= 2;
 
   const regolamentoVersionLabel = activeRegolamento?.versione || REGOLAMENTO_FALLBACK_VERSION;
@@ -179,15 +197,17 @@ export function RecruitmentWizard({
     e.preventDefault();
     setStep1Error(null);
     try {
-      validateCandidaturaInput({
+      const validated = validateCandidaturaInput({
         nome,
         cognome,
         emailFantaleghe,
+        cellulare,
         nomeSquadra,
         note,
         consensoPrivacy: true, // checked explicitly at Step 2
         versioneInformativa: config.versioneInformativa,
       });
+      setCellulare(validated.cellulare);
       setStep(2);
     } catch (err) {
       setStep1Error(err instanceof Error ? err.message : 'Controlla i campi inseriti.');
@@ -249,17 +269,28 @@ export function RecruitmentWizard({
     }
 
     setSubmitting(true);
+    setSubmitStage('verifying');
     try {
       const clean = validateCandidaturaInput({
         nome,
         cognome,
         emailFantaleghe,
+        cellulare,
         nomeSquadra,
         note,
         consensoPrivacy,
         versioneInformativa: config.versioneInformativa,
+        regolamentoAccettato: consensoRegolamento,
+        regolamentoVersione: regolamentoVersionLabel,
       });
 
+      // Animazione clessidra di verifica completezza (~2.5 secondi)
+      const minVerificationWait = new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 2500);
+      });
+      await minVerificationWait;
+
+      setSubmitStage('saving');
       const result = await submitCandidatura(clean);
       const submittedAtIso = new Date().toISOString();
 
@@ -289,6 +320,7 @@ export function RecruitmentWizard({
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
+        cellulare: clean.cellulare,
         nomeSquadra: clean.nomeSquadra,
         nomeCompleto,
         submittedAtIso,
@@ -298,6 +330,7 @@ export function RecruitmentWizard({
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
+        cellulare: clean.cellulare,
         nomeSquadra: clean.nomeSquadra,
         nomeCompleto,
         submittedAtIso,
@@ -329,6 +362,53 @@ export function RecruitmentWizard({
     }
   };
 
+  const handleDownloadRegolamentoPdf = () => {
+    if (!activeRegolamento?.contenutoTesto?.trim()) {
+      return;
+    }
+    setPdfFeedback(null);
+    try {
+      const fileName = `FICUP-${config.stagione.replace('/', '-')}-Regolamento-Ufficiale-v${
+        activeRegolamento.versione || 'attivo'
+      }.pdf`;
+      downloadOfficialDocumentPdf({
+        title: activeRegolamento.titolo || `Regolamento Ufficiale FICUP ${config.stagione}`,
+        subtitle: 'Regolamento ufficiale della competizione',
+        version: activeRegolamento.versione || config.stagione,
+        publishedAt: activeRegolamento.dataPubblicazione || undefined,
+        content: activeRegolamento.contenutoTesto,
+        fileName,
+      });
+      setPdfFeedback(`PDF "${fileName}" scaricato.`);
+    } catch (err) {
+      setPdfFeedback(err instanceof Error ? err.message : 'Errore generazione PDF.');
+    }
+  };
+
+  const handleDownloadChatRulesPdf = () => {
+    setPdfFeedback(null);
+    try {
+      const content =
+        activeChatRulesDoc && activeChatRulesDoc.contenutoTesto.trim()
+          ? maskSensitiveWhatsappLinks(activeChatRulesDoc.contenutoTesto.trim())
+          : OFFICIAL_CHAT_RULES_SECTIONS.map(
+              (sec) => `# ${sec.title}\n${sec.paragraphs.join('\n\n')}`
+            ).join('\n\n');
+      const fileName = `FICUP-${config.stagione.replace('/', '-')}-Regole-Chat-v${chatRulesVersionLabel}.pdf`;
+      downloadOfficialDocumentPdf({
+        title: activeChatRulesDoc?.titolo || 'Regole Ufficiali Chat WhatsApp FICUP',
+        subtitle: 'Codice di comportamento community WhatsApp',
+        version: chatRulesVersionLabel,
+        publishedAt: activeChatRulesDoc?.dataPubblicazione || undefined,
+        content,
+        fileName,
+      });
+      setPdfFeedback(`PDF "${fileName}" scaricato.`);
+    } catch (err) {
+      setPdfFeedback(err instanceof Error ? err.message : 'Errore generazione PDF.');
+    }
+  };
+
   const handleCopyCode = async () => {
     if (!submittedRecord || typeof navigator === 'undefined' || !navigator.clipboard) {
       return;
@@ -356,6 +436,7 @@ export function RecruitmentWizard({
         nome.trim().length >= 1 &&
         cognome.trim().length >= 1 &&
         emailValidHint &&
+        phoneValidHint &&
         squadValidHint
       );
     }
@@ -596,6 +677,40 @@ export function RecruitmentWizard({
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label
+                        htmlFor="ficup-cellulare"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Numero di cellulare (+39) *
+                      </label>
+                      {phoneValidHint && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                          <Check className="w-3 h-3" /> Formato +39 valido
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        id="ficup-cellulare"
+                        type="tel"
+                        inputMode="tel"
+                        autoComplete="tel"
+                        required
+                        maxLength={24}
+                        value={cellulare}
+                        onChange={(e) => setCellulare(e.target.value)}
+                        placeholder="+39 340 123 4567"
+                        className={`${inputClass} pl-10 font-mono-tabular`}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 leading-relaxed">
+                      Il numero viene richiesto per consentire l&apos;accesso al gruppo WhatsApp ufficiale e per le comunicazioni organizzative della lega.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
                         htmlFor="ficup-squadra"
                         className="block text-xs font-semibold text-slate-700"
                       >
@@ -620,19 +735,24 @@ export function RecruitmentWizard({
                   </div>
 
                   <div>
-                    <label
-                      htmlFor="ficup-note"
-                      className="block text-xs font-semibold text-slate-700 mb-1.5"
-                    >
-                      Note facoltative per lo staff
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="ficup-note"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Note facoltative per lo staff
+                      </label>
+                      <span className="font-mono-tabular text-[11px] text-slate-400">
+                        {note.length}/700
+                      </span>
+                    </div>
                     <textarea
                       id="ficup-note"
                       rows={3}
-                      maxLength={1000}
+                      maxLength={700}
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
-                      placeholder="Esperienza su Fantaleghe, disponibilità o eventuali richieste (max 1000 caratteri)"
+                      placeholder="Esperienza su Fantaleghe, disponibilità o eventuali richieste (max 700 caratteri)"
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20 focus:border-[#0B1F4D] transition-all"
                     />
                   </div>
@@ -777,18 +897,32 @@ export function RecruitmentWizard({
                   </div>
                 ) : activeRegolamento && activeRegolamento.contenutoTesto.trim() ? (
                   <div className="space-y-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
-                        <FileText className="w-5 h-5 text-[#C69214]" />
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
+                          <FileText className="w-5 h-5 text-[#C69214]" />
+                        </div>
+                        <div className="text-xs sm:text-sm space-y-0.5 min-w-0">
+                          <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
+                          <p className="text-slate-600 font-mono-tabular text-xs">
+                            Versione {activeRegolamento.versione} · Pubblicato:{' '}
+                            {activeRegolamento.dataPubblicazione || '—'}
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-xs sm:text-sm space-y-0.5 min-w-0">
-                        <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
-                        <p className="text-slate-600 font-mono-tabular text-xs">
-                          Versione {activeRegolamento.versione} · Pubblicato:{' '}
-                          {activeRegolamento.dataPubblicazione || '—'}
-                        </p>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={handleDownloadRegolamentoPdf}
+                        className="min-h-[42px] px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
+                      >
+                        <Download className="w-4 h-4 text-[#D4AF37]" />
+                        <span>Scarica PDF</span>
+                      </button>
                     </div>
+
+                    {pdfFeedback && (
+                      <p className="text-xs font-semibold text-emerald-700">{pdfFeedback}</p>
+                    )}
 
                     <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 max-h-[26rem] overflow-y-auto shadow-xs">
                       <RegulationContentView content={activeRegolamento.contenutoTesto} />
@@ -855,8 +989,10 @@ export function RecruitmentWizard({
                     className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
                   />
                   <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
-                    Confermo di aver letto e preso visione del Regolamento ufficiale FICUP {config.stagione} (versione{' '}
-                    <strong className="font-mono-tabular">{regolamentoVersionLabel}</strong>). *
+                    Confermo di aver letto e accettato il regolamento FICUP {config.stagione}.{' '}
+                    <span className="font-mono-tabular text-xs text-slate-500">
+                      (v{regolamentoVersionLabel}) *
+                    </span>
                   </span>
                 </label>
 
@@ -890,16 +1026,26 @@ export function RecruitmentWizard({
                 transition={{ duration: 0.2 }}
                 className="space-y-6"
               >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Passaggio 4 · Codice di comportamento della community
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Regole Ufficiali Chat WhatsApp FICUP (v{chatRulesVersionLabel})
-                  </h1>
-                  <p className="mt-1.5 text-sm text-slate-600">
-                    Leggi attentamente le regole di comportamento del Gruppo WhatsApp Ufficiale. Il collegamento di ingresso al gruppo resta riservato e si sbloccherà esclusivamente dopo l&apos;approvazione e l&apos;autorizzazione dello staff.
-                  </p>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+                      Passaggio 4 · Codice di comportamento della community
+                    </p>
+                    <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+                      Regole Ufficiali Chat WhatsApp FICUP (v{chatRulesVersionLabel})
+                    </h1>
+                    <p className="mt-1.5 text-sm text-slate-600">
+                      Leggi attentamente le regole di comportamento del Gruppo WhatsApp Ufficiale. Il collegamento di ingresso al gruppo resta riservato e si sbloccherà esclusivamente dopo l&apos;approvazione e l&apos;autorizzazione dello staff.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDownloadChatRulesPdf}
+                    className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-xs font-bold hover:bg-slate-50 inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
+                  >
+                    <Download className="w-4 h-4 text-[#C69214]" />
+                    <span>Scarica PDF</span>
+                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 max-h-80 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
@@ -980,14 +1126,36 @@ export function RecruitmentWizard({
                 className="space-y-6"
               >
                 {submitting ? (
-                  <div className="py-10 text-center space-y-3">
-                    <Loader2 className="w-8 h-8 text-[#0B1F4D] animate-spin mx-auto" />
-                    <h1 className="font-display text-xl font-bold text-[#0B1F4D]">
-                      Registrazione candidatura in corso...
-                    </h1>
-                    <p className="text-sm text-slate-600">
-                      Salvataggio sicuro su Cloud Firestore e generazione del codice univoco FICUP26.
-                    </p>
+                  <div className="py-12 px-4 text-center space-y-5">
+                    <motion.div
+                      animate={{ rotate: [0, 180, 180, 360] }}
+                      transition={{
+                        duration: 2.4,
+                        repeat: Infinity,
+                        ease: 'easeInOut',
+                      }}
+                      className="w-16 h-16 rounded-2xl bg-[#0B1F4D] text-[#D4AF37] border border-[#C69214]/40 shadow-md flex items-center justify-center mx-auto"
+                    >
+                      <Hourglass className="w-8 h-8" />
+                    </motion.div>
+
+                    <div className="space-y-2 max-w-md mx-auto">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#C69214]">
+                        {submitStage === 'verifying'
+                          ? 'Controllo di completezza'
+                          : 'Salvataggio sicuro'}
+                      </p>
+                      <h1 className="font-display text-xl sm:text-2xl font-extrabold text-[#0B1F4D]">
+                        {submitStage === 'verifying'
+                          ? 'Verifica della candidatura in corso...'
+                          : 'Registrazione su Cloud Firestore...'}
+                      </h1>
+                      <p className="text-sm text-slate-600 leading-relaxed">
+                        {submitStage === 'verifying'
+                          ? 'Controlliamo i dati anagrafici, il numero +39 per WhatsApp e tutte le accettazioni regolamentari.'
+                          : 'Generazione del codice univoco FICUP26 e salvataggio protetto della tua richiesta.'}
+                      </p>
+                    </div>
                   </div>
                 ) : submittedRecord ? (
                   <div className="space-y-6">
@@ -997,11 +1165,14 @@ export function RecruitmentWizard({
                       </div>
                       <div>
                         <p className="text-xs font-semibold text-emerald-700">
-                          Candidatura registrata su Cloud Firestore · Stato: NUOVO
+                          Candidatura completa e registrata su Cloud Firestore · Stato: NUOVO
                         </p>
                         <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
                           LA TUA CANDIDATURA È STATA RICEVUTA!
                         </h1>
+                        <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                          Il nostro staff verificherà le informazioni e ti contatterà per completare la procedura.
+                        </p>
                       </div>
                     </div>
 
@@ -1051,10 +1222,16 @@ export function RecruitmentWizard({
                       <p className="break-all">
                         <strong>Email Fantaleghe:</strong> {submittedRecord.emailFantaleghe}
                       </p>
+                      <p className="font-mono-tabular">
+                        <strong>Numero di cellulare:</strong> {submittedRecord.cellulare}
+                      </p>
                       <p>
                         <strong>Squadra proposta:</strong> {submittedRecord.nomeSquadra}
                       </p>
-                      <p className="text-xs font-mono-tabular text-slate-500 pt-1">
+                      <p className="text-xs font-semibold text-emerald-700 pt-1">
+                        ✓ Verifica automatica completezza superata · In attesa di conferma e autorizzazione finale dello staff
+                      </p>
+                      <p className="text-xs font-mono-tabular text-slate-500">
                         Documenti accettati: Privacy v{config.versioneInformativa} · Regolamento v
                         {regolamentoVersionLabel} · Regole Chat v{chatRulesVersionLabel}
                       </p>
@@ -1146,6 +1323,14 @@ export function RecruitmentWizard({
                         <span className="text-xs font-medium text-slate-500">Email Fantaleghe</span>
                         <span className="text-sm font-semibold text-[#0284C7] break-all">
                           {emailFantaleghe.trim().toLowerCase()}
+                        </span>
+                      </div>
+                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
+                        <span className="text-xs font-medium text-slate-500">
+                          Numero di cellulare
+                        </span>
+                        <span className="text-sm font-semibold font-mono-tabular text-[#0B1F4D]">
+                          {cellulare.trim()}
                         </span>
                       </div>
                       <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">

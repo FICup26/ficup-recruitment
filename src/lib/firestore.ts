@@ -65,10 +65,13 @@ export interface CandidaturaInput {
   nome: string;
   cognome: string;
   emailFantaleghe: string;
+  cellulare: string;
   nomeSquadra: string;
   note?: string;
   consensoPrivacy: boolean;
   versioneInformativa: string;
+  regolamentoAccettato?: boolean;
+  regolamentoVersione?: string;
 }
 
 export interface CandidaturaRecord {
@@ -77,8 +80,11 @@ export interface CandidaturaRecord {
   nome: string;
   cognome: string;
   emailFantaleghe: string;
+  cellulare: string;
   nomeSquadra: string;
   note: string;
+  regolamentoAccettatoNote: string;
+  isCompleta: boolean;
   stato: CandidaturaStato;
   noteInterne: string;
   consensoPrivacy: boolean;
@@ -234,12 +240,106 @@ export function generateCandidaturaCode(): string {
   return `FICUP26-${suffix}`;
 }
 
+const ITALIAN_MOBILE_REGEX = /^\+393\d{8,9}$/;
+const PHONE_NOTE_TAG_REGEX = /^\[Cellulare:\s*([^\]]+)\]\s*$/i;
+const REG_NOTE_TAG_REGEX = /^\[Regolamento FICUP 26\/27:\s*([^\]]+)\]\s*$/i;
+
+export function normalizeAndValidateItalianPhone(raw: string): string {
+  const cleaned = raw.trim().replace(/[\s\-().]/g, '');
+  if (!cleaned) {
+    throw new Error('Inserire un numero di cellulare obbligatorio con prefisso italiano +39.');
+  }
+
+  let normalized = cleaned;
+  if (normalized.startsWith('0039')) {
+    normalized = `+39${normalized.slice(4)}`;
+  } else if (/^3\d{8,9}$/.test(normalized)) {
+    normalized = `+39${normalized}`;
+  } else if (/^393\d{8,9}$/.test(normalized)) {
+    normalized = `+${normalized}`;
+  }
+
+  if (!ITALIAN_MOBILE_REGEX.test(normalized)) {
+    throw new Error(
+      'Inserire un numero di cellulare italiano valido con prefisso +39 (es. +39 340 123 4567).'
+    );
+  }
+
+  const subscriber = normalized.slice(3);
+  return `+39 ${subscriber.slice(0, 3)} ${subscriber.slice(3, 6)} ${subscriber.slice(6)}`;
+}
+
+export function encodeStructuredCandidaturaNote(params: {
+  cellulare: string;
+  regolamentoAccettato?: boolean;
+  regolamentoVersione?: string;
+  userNote?: string;
+}): string {
+  const headerLines: string[] = [`[Cellulare: ${params.cellulare.trim()}]`];
+  if (params.regolamentoAccettato) {
+    const nowLabel = new Intl.DateTimeFormat('it-IT', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date());
+    const versionLabel = (params.regolamentoVersione ?? '').trim() || '2026.1';
+    headerLines.push(`[Regolamento FICUP 26/27: Accettato il ${nowLabel} (v${versionLabel})]`);
+  }
+
+  const headerBlock = headerLines.join('\n');
+  const cleanUserNote = (params.userNote ?? '').trim();
+  if (!cleanUserNote) {
+    return headerBlock.slice(0, 1000);
+  }
+
+  const maxUserChars = Math.max(0, 1000 - headerBlock.length - 1);
+  return `${headerBlock}\n${cleanUserNote.slice(0, maxUserChars)}`;
+}
+
+export function parseStructuredCandidaturaNote(rawNote: string): {
+  cellulare: string;
+  regolamentoAccettatoNote: string;
+  cleanNote: string;
+} {
+  if (!rawNote) {
+    return { cellulare: '', regolamentoAccettatoNote: '', cleanNote: '' };
+  }
+
+  const lines = rawNote.split(/\r?\n/);
+  let cellulare = '';
+  let regolamentoAccettatoNote = '';
+  const remainingLines: string[] = [];
+
+  for (const line of lines) {
+    const phoneMatch = line.match(PHONE_NOTE_TAG_REGEX);
+    if (phoneMatch?.[1] && !cellulare) {
+      cellulare = phoneMatch[1].trim();
+      continue;
+    }
+    const regMatch = line.match(REG_NOTE_TAG_REGEX);
+    if (regMatch?.[1] && !regolamentoAccettatoNote) {
+      regolamentoAccettatoNote = regMatch[1].trim();
+      continue;
+    }
+    remainingLines.push(line);
+  }
+
+  return {
+    cellulare,
+    regolamentoAccettatoNote,
+    cleanNote: remainingLines.join('\n').trim(),
+  };
+}
+
 export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaInput {
   const nome = input.nome.trim().slice(0, 80);
   const cognome = input.cognome.trim().slice(0, 80);
   const emailFantaleghe = input.emailFantaleghe.trim().toLowerCase().slice(0, 160);
+  const cellulare = normalizeAndValidateItalianPhone(input.cellulare);
   const nomeSquadra = input.nomeSquadra.trim().slice(0, 80);
-  const note = (input.note ?? '').trim().slice(0, 1000);
+  const note = (input.note ?? '').trim().slice(0, 750);
   const versioneInformativa = input.versioneInformativa.trim().slice(0, 32) || '2026.1';
 
   if (nome.length < 1) {
@@ -249,7 +349,7 @@ export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaIn
     throw new Error('Inserire un cognome valido.');
   }
   if (!EMAIL_REGEX.test(emailFantaleghe) || emailFantaleghe.length < 5) {
-    throw new Error("Inserire un indirizzo email Fantaleghe valido.");
+    throw new Error('Inserire un indirizzo email Fantaleghe valido.');
   }
   if (nomeSquadra.length < 2) {
     throw new Error('Il nome della squadra deve contenere almeno 2 caratteri.');
@@ -262,10 +362,13 @@ export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaIn
     nome,
     cognome,
     emailFantaleghe,
+    cellulare,
     nomeSquadra,
     note,
     consensoPrivacy: true,
     versioneInformativa,
+    regolamentoAccettato: Boolean(input.regolamentoAccettato),
+    regolamentoVersione: input.regolamentoVersione,
   };
 }
 
@@ -276,6 +379,12 @@ export async function submitCandidatura(
   const clean = validateCandidaturaInput(input);
   const codiceCandidatura = generateCandidaturaCode();
   const collectionPath = 'candidature';
+  const encodedNote = encodeStructuredCandidaturaNote({
+    cellulare: clean.cellulare,
+    regolamentoAccettato: clean.regolamentoAccettato,
+    regolamentoVersione: clean.regolamentoVersione,
+    userNote: clean.note,
+  });
 
   try {
     const docRef = await addDoc(collection(firestore, collectionPath), {
@@ -284,7 +393,7 @@ export async function submitCandidatura(
       cognome: clean.cognome,
       emailFantaleghe: clean.emailFantaleghe,
       nomeSquadra: clean.nomeSquadra,
-      note: clean.note ?? '',
+      note: encodedNote,
       stato: 'NUOVO' as CandidaturaStato,
       noteInterne: '',
       consensoPrivacy: true,
@@ -454,19 +563,38 @@ export async function verifyAdminAuthorization(
 }
 
 function mapCandidaturaDoc(id: string, data: Record<string, unknown>): CandidaturaRecord {
+  const nome = String(data.nome ?? '');
+  const cognome = String(data.cognome ?? '');
+  const emailFantaleghe = String(data.emailFantaleghe ?? '');
+  const nomeSquadra = String(data.nomeSquadra ?? '');
+  const consensoPrivacy = Boolean(data.consensoPrivacy);
+  const rawNote = String(data.note ?? '');
+  const parsed = parseStructuredCandidaturaNote(rawNote);
+  const isCompleta = Boolean(
+    nome.trim().length >= 1 &&
+      cognome.trim().length >= 1 &&
+      EMAIL_REGEX.test(emailFantaleghe.trim()) &&
+      nomeSquadra.trim().length >= 2 &&
+      parsed.cellulare.trim().length > 0 &&
+      consensoPrivacy
+  );
+
   return {
     id,
     codiceCandidatura: String(data.codiceCandidatura ?? ''),
-    nome: String(data.nome ?? ''),
-    cognome: String(data.cognome ?? ''),
-    emailFantaleghe: String(data.emailFantaleghe ?? ''),
-    nomeSquadra: String(data.nomeSquadra ?? ''),
-    note: String(data.note ?? ''),
+    nome,
+    cognome,
+    emailFantaleghe,
+    cellulare: parsed.cellulare,
+    nomeSquadra,
+    note: parsed.cleanNote,
+    regolamentoAccettatoNote: parsed.regolamentoAccettatoNote,
+    isCompleta,
     stato: (STATI_CANDIDATURA.includes(data.stato as CandidaturaStato)
       ? data.stato
       : 'NUOVO') as CandidaturaStato,
     noteInterne: String(data.noteInterne ?? ''),
-    consensoPrivacy: Boolean(data.consensoPrivacy),
+    consensoPrivacy,
     versioneInformativa: String(data.versioneInformativa ?? ''),
     createdAt: toDateOrNull(data.createdAt),
     updatedAt: toDateOrNull(data.updatedAt),
@@ -1172,6 +1300,37 @@ export interface WhatsappAutorizzazioneRecord {
   autorizzatoDaEmail: string;
   createdAt: Date | null;
   updatedAt: Date | null;
+}
+
+export type SimplifiedCandidaturaStato = 'DA VERIFICARE' | 'COMPLETATO' | 'RESPINTO';
+
+export function isEffectiveWaAuthorized(
+  c: Pick<CandidaturaRecord, 'stato'>,
+  waAuth?: Pick<WhatsappAutorizzazioneRecord, 'statoAutorizzazione'> | null
+): boolean {
+  if (waAuth?.statoAutorizzazione === 'REVOCATO') {
+    return false;
+  }
+  if (waAuth?.statoAutorizzazione === 'NON_AUTORIZZATO' || waAuth?.statoAutorizzazione === 'IN_ATTESA') {
+    return false;
+  }
+  if (waAuth?.statoAutorizzazione === 'AUTORIZZATO') {
+    return true;
+  }
+  return c.stato === 'COMPLETATO';
+}
+
+export function resolveSimplifiedCandidaturaStato(
+  c: Pick<CandidaturaRecord, 'stato'>,
+  waAuth?: Pick<WhatsappAutorizzazioneRecord, 'statoAutorizzazione'> | null
+): SimplifiedCandidaturaStato {
+  if (c.stato === 'RESPINTO') {
+    return 'RESPINTO';
+  }
+  if (c.stato === 'COMPLETATO' && isEffectiveWaAuthorized(c, waAuth)) {
+    return 'COMPLETATO';
+  }
+  return 'DA VERIFICARE';
 }
 
 export async function fetchWhatsappGruppi(options?: {

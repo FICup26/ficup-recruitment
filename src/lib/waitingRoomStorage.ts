@@ -11,6 +11,7 @@ export interface WaitingRoomPass {
   codiceCandidatura: string;
   nomeCompleto: string;
   emailFantaleghe: string;
+  cellulare?: string;
   nomeSquadra: string;
   submittedAtIso: string;
   acceptedDocs?: WaitingRoomAcceptedDocs;
@@ -44,6 +45,9 @@ export function loadWaitingRoomPass(): WaitingRoomPass | null {
         nomeSquadra: parsed.nomeSquadra,
         submittedAtIso: parsed.submittedAtIso,
       };
+      if (typeof parsed.cellulare === 'string' && parsed.cellulare.trim()) {
+        result.cellulare = parsed.cellulare;
+      }
       if (
         parsed.acceptedDocs &&
         typeof parsed.acceptedDocs.versionePrivacy === 'string' &&

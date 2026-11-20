@@ -189,7 +189,7 @@ function FicupPortal() {
                     FANTA ITALIA CUP
                   </p>
                   <p className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#C69214]">
-                    THE FOOTBALL UNIVERSE
+                    L&apos;universo del Fantacalcio
                   </p>
                 </div>
               </div>

@@ -16,11 +16,12 @@ import {
   MessageCircle,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Trophy,
   XCircle,
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   fetchWaitingRoomStatus,
@@ -62,22 +63,12 @@ function formatIsoDate(iso: string | null | undefined): string {
 
 function getReadableStateLabel(stato: CandidaturaStato | null): string {
   switch (stato) {
-    case 'NUOVO':
-      return 'Ricevuta';
-    case 'DA CONTATTARE':
-      return 'In valutazione · Da contattare';
-    case 'APPROVATO':
-      return 'Approvata';
-    case 'INVITO INVIATO':
-      return 'Invito Fantaleghe inviato';
-    case 'DA COMPLETARE':
-      return 'In attesa di completamento';
     case 'COMPLETATO':
-      return 'Completata';
+      return 'COMPLETATO';
     case 'RESPINTO':
-      return 'Non accolta';
+      return 'RESPINTO';
     default:
-      return 'In attesa di verifica';
+      return 'DA VERIFICARE';
   }
 }
 
@@ -87,15 +78,8 @@ function getStateBadgeClasses(stato: CandidaturaStato | null): string {
       return 'bg-emerald-50 border-emerald-200 text-emerald-700';
     case 'RESPINTO':
       return 'bg-red-50 border-red-200 text-red-700';
-    case 'APPROVATO':
-    case 'INVITO INVIATO':
-    case 'DA COMPLETARE':
-      return 'bg-amber-50 border-amber-200 text-[#B45309]';
-    case 'NUOVO':
-    case 'DA CONTATTARE':
-      return 'bg-sky-50 border-sky-200 text-[#0284C7]';
     default:
-      return 'bg-slate-100 border-slate-200 text-slate-600';
+      return 'bg-amber-50 border-amber-200 text-[#B45309]';
   }
 }
 
@@ -261,6 +245,7 @@ export function WaitingRoom({
   onWaitingPassVerified,
 }: WaitingRoomProps) {
   const [copiedCode, setCopiedCode] = useState(false);
+  const prefersReducedMotion = useReducedMotion();
 
   const [lookupCode, setLookupCode] = useState(waitingPass?.codiceCandidatura ?? '');
   const [lookupEmail, setLookupEmail] = useState(waitingPass?.emailFantaleghe ?? '');
@@ -407,7 +392,79 @@ export function WaitingRoom({
       </section>
 
       {/* Main Content */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+        {/* Celebratory Completion Hero — Shown ONLY when adhesion is genuinely COMPLETATO & Official WhatsApp is unlocked */}
+        {canAccessOfficialWa && serverStatus?.linkWhatsappUfficiale && (
+          <motion.div
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 18, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.55, ease: 'easeOut' }}
+            className="relative overflow-hidden rounded-3xl bg-[#071436] text-white border border-[#D4AF37]/50 p-6 sm:p-10 shadow-[0_24px_60px_-16px_rgba(7,20,54,0.45)]"
+          >
+            <div
+              aria-hidden="true"
+              className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#D4AF37] to-transparent"
+            />
+            <div
+              aria-hidden="true"
+              className="absolute -right-12 -top-12 w-72 h-72 rounded-full bg-[radial-gradient(circle,rgba(212,175,55,0.22)_0%,transparent_70%)] pointer-events-none"
+            />
+            <div
+              aria-hidden="true"
+              className="absolute -left-12 -bottom-16 w-72 h-72 rounded-full bg-[radial-gradient(circle,rgba(16,185,129,0.2)_0%,transparent_70%)] pointer-events-none"
+            />
+
+            {/* Subtle GPU sparkle dots */}
+            {!prefersReducedMotion && (
+              <div aria-hidden="true" className="pointer-events-none">
+                <motion.span
+                  animate={{ y: [-4, 4, -4], opacity: [0.5, 1, 0.5] }}
+                  transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+                  className="absolute top-6 right-12 w-2.5 h-2.5 rotate-45 bg-[#D4AF37]"
+                />
+                <motion.span
+                  animate={{ y: [4, -4, 4], opacity: [0.4, 0.9, 0.4] }}
+                  transition={{ duration: 3.8, repeat: Infinity, ease: 'easeInOut' }}
+                  className="absolute bottom-8 right-28 w-2 h-2 rotate-45 bg-emerald-400"
+                />
+                <motion.span
+                  animate={{ y: [-3, 5, -3], opacity: [0.4, 0.95, 0.4] }}
+                  transition={{ duration: 4.1, repeat: Infinity, ease: 'easeInOut' }}
+                  className="hidden sm:block absolute top-14 right-40 w-2 h-2 rotate-45 bg-sky-400"
+                />
+              </div>
+            )}
+
+            <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="space-y-3 max-w-2xl">
+                <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-[#FDE68A]">
+                  <Sparkles className="w-4 h-4 text-[#D4AF37]" />
+                  <span>Traguardo raggiunto · Stato COMPLETATO</span>
+                </div>
+
+                <h2 className="font-display text-3xl sm:text-5xl font-black tracking-tight text-white leading-none">
+                  COMPLIMENTI 👏
+                </h2>
+
+                <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
+                  Sei entrato ufficialmente a far parte del mondo <strong className="text-[#FDE68A]">FANTA ITALIA CUP {config.stagione}</strong> con la tua squadra <strong className="text-white">{activeTeam}</strong>. Invito verificato e accesso al Gruppo WhatsApp Ufficiale sbloccato!
+                </p>
+              </div>
+
+              <a
+                href={serverStatus.linkWhatsappUfficiale}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-h-[54px] px-6 py-3.5 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2.5 shadow-[0_14px_30px_-10px_rgba(212,175,55,0.5)] whitespace-nowrap shrink-0"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>ENTRA NEL GRUPPO UFFICIALE</span>
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            </div>
+          </motion.div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Accesso + Tessera Digitale + Documenti + Timeline */}
           <div className="lg:col-span-7 space-y-6">
@@ -691,7 +748,7 @@ export function WaitingRoom({
                     disabled={!config.iscrizioniAperte}
                     className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Candidati ora</span>
+                    <span>Entra in campo ora</span>
                     <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
                   </button>
                 </div>

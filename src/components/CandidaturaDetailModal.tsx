@@ -10,7 +10,9 @@ import {
   Loader2,
   Mail,
   MessageCircle,
+  Phone,
   Send,
+  ShieldCheck,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -24,6 +26,8 @@ import {
   fetchStoricoByCandidatura,
   fetchWhatsappAutorizzazioneByCandidatura,
   fetchWhatsappGruppi,
+  getAdminConfig,
+  resolveSimplifiedCandidaturaStato,
   saveWhatsappAutorizzazioneByAdmin,
   STATI_CANDIDATURA,
   updateCandidaturaByAdmin,
@@ -31,7 +35,9 @@ import {
   type CandidaturaRecord,
   type CandidaturaStato,
   type EmailLogRecord,
+  type SimplifiedCandidaturaStato,
   type StoricoOperazioneRecord,
+  type WhatsappAutorizzazioneRecord,
   type WhatsappAutorizzazioneStato,
   type WhatsappGruppoRecord,
 } from '../lib/firestore';
@@ -67,6 +73,17 @@ export function statusBadgeStyle(stato: CandidaturaStato): string {
       return 'bg-emerald-50 text-emerald-800 border-emerald-200';
     case 'RESPINTO':
       return 'bg-red-50 text-red-800 border-red-200';
+  }
+}
+
+export function simplifiedStatusBadgeStyle(stato: SimplifiedCandidaturaStato): string {
+  switch (stato) {
+    case 'COMPLETATO':
+      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    case 'RESPINTO':
+      return 'bg-red-50 text-red-800 border-red-200';
+    default:
+      return 'bg-amber-50 text-amber-900 border-amber-200';
   }
 }
 
@@ -113,15 +130,20 @@ export function CandidaturaDetailModal({
 
   // WhatsApp & Team reference authorization state
   const [waGruppi, setWaGruppi] = useState<WhatsappGruppoRecord[]>([]);
+  const [waAuthRecord, setWaAuthRecord] = useState<WhatsappAutorizzazioneRecord | null>(null);
   const [waStato, setWaStato] = useState<WhatsappAutorizzazioneStato>('NON_AUTORIZZATO');
   const [waGruppoId, setWaGruppoId] = useState('');
+  const [waLinkAssegnato, setWaLinkAssegnato] = useState('');
   const [waSquadraRef, setWaSquadraRef] = useState('');
+  const [officialConfigWaLink, setOfficialConfigWaLink] = useState('');
   const [waSaving, setWaSaving] = useState(false);
   const [waSaveMsg, setWaSaveMsg] = useState<string | null>(null);
   const [waError, setWaError] = useState<string | null>(null);
 
   const [templateKey, setTemplateKey] = useState<NotificationTemplateKey>('APPROVAZIONE');
   const [copiedEmail, setCopiedEmail] = useState(false);
+  const [copiedHtmlEmail, setCopiedHtmlEmail] = useState(false);
+  const [copiedPhone, setCopiedPhone] = useState(false);
 
   const refreshEmailLogs = async (candidaturaId: string) => {
     setEmailLogsLoading(true);
@@ -149,6 +171,9 @@ export function CandidaturaDetailModal({
     setTemplateKey(getSuggestedTemplateForState(candidatura.stato));
     setWaSaveMsg(null);
     setWaError(null);
+    setCopiedPhone(false);
+    setCopiedEmail(false);
+    setCopiedHtmlEmail(false);
 
     let cancelled = false;
     setStoricoLoading(true);
@@ -214,16 +239,21 @@ export function CandidaturaDetailModal({
         () => [] as WhatsappGruppoRecord[]
       ),
       fetchWhatsappAutorizzazioneByCandidatura(candidatura.id).catch(() => null),
-    ]).then(([gruppi, authRec]) => {
+      getAdminConfig().catch(() => null),
+    ]).then(([gruppi, authRec, adminCfg]) => {
       if (!cancelled) {
         setWaGruppi(gruppi);
+        setOfficialConfigWaLink(adminCfg?.linkWhatsappUfficiale?.trim() ?? '');
+        setWaAuthRecord(authRec);
         if (authRec) {
           setWaStato(authRec.statoAutorizzazione);
           setWaGruppoId(authRec.gruppoId);
+          setWaLinkAssegnato(authRec.linkAssegnato);
           setWaSquadraRef(authRec.squadraAssegnataZonaVar);
         } else {
           setWaStato('NON_AUTORIZZATO');
           setWaGruppoId('');
+          setWaLinkAssegnato('');
           setWaSquadraRef('');
         }
       }
@@ -254,6 +284,19 @@ export function CandidaturaDetailModal({
         linkAssegnato: selectedGroup?.linkInvito ?? '',
         squadraAssegnataZonaVar: waSquadraRef,
         adminUser,
+      });
+      setWaAuthRecord({
+        id: candidatura.id,
+        candidaturaId: candidatura.id,
+        codiceCandidatura: candidatura.codiceCandidatura,
+        statoAutorizzazione: waStato,
+        gruppoId: selectedGroup?.id ?? waGruppoId,
+        gruppoNome: selectedGroup?.nome ?? '',
+        linkAssegnato: selectedGroup?.linkInvito ?? '',
+        squadraAssegnataZonaVar: waSquadraRef,
+        autorizzatoDaEmail: adminUser.email ?? '',
+        createdAt: waAuthRecord?.createdAt ?? new Date(),
+        updatedAt: new Date(),
       });
       setWaSaveMsg(
         'Autorizzazione WhatsApp salvata su Firestore e registrata nello storico operazioni.'
@@ -328,7 +371,37 @@ export function CandidaturaDetailModal({
     }
   };
 
-  const draft = buildNotificationDraft(templateKey, candidatura, operationalEmail);
+  const selectedWaGroupLink =
+    waGruppi.find((g) => g.id === waGruppoId)?.linkInvito?.trim() ||
+    waLinkAssegnato.trim() ||
+    officialConfigWaLink.trim();
+
+  const simplifiedStato = resolveSimplifiedCandidaturaStato(candidatura, waAuthRecord);
+
+  const isCandidateCompleteForApproval = Boolean(
+    candidatura.isCompleta ||
+      (accettazione?.privacyAccettata &&
+        accettazione?.regolamentoAccettato &&
+        candidatura.cellulare.trim().length > 0)
+  );
+
+  const draft = buildNotificationDraft(templateKey, candidatura, operationalEmail, {
+    officialWhatsappLink: selectedWaGroupLink,
+    isVerifiedForWhatsappLink: isCandidateCompleteForApproval,
+  });
+
+  const handleCopyPhone = async () => {
+    if (!candidatura.cellulare || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(candidatura.cellulare);
+      setCopiedPhone(true);
+      window.setTimeout(() => setCopiedPhone(false), 2000);
+    } catch {
+      // Ignore clipboard failure
+    }
+  };
 
   const handleCopyDraft = async () => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) {
@@ -341,6 +414,36 @@ export function CandidaturaDetailModal({
       window.setTimeout(() => setCopiedEmail(false), 2000);
     } catch {
       // Ignore clipboard failure
+    }
+  };
+
+  const handleCopyHtmlDraft = async () => {
+    if (!draft.htmlBody || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+        const htmlBlob = new Blob([draft.htmlBody], { type: 'text/html' });
+        const textBlob = new Blob([draft.body], { type: 'text/plain' });
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': htmlBlob,
+            'text/plain': textBlob,
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(draft.htmlBody);
+      }
+      setCopiedHtmlEmail(true);
+      window.setTimeout(() => setCopiedHtmlEmail(false), 2200);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(draft.htmlBody);
+        setCopiedHtmlEmail(true);
+        window.setTimeout(() => setCopiedHtmlEmail(false), 2200);
+      } catch {
+        // Ignore clipboard failure
+      }
     }
   };
 
@@ -361,11 +464,11 @@ export function CandidaturaDetailModal({
               </span>
               <span aria-hidden="true">·</span>
               <span
-                className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${statusBadgeStyle(
-                  candidatura.stato
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${simplifiedStatusBadgeStyle(
+                  simplifiedStato
                 )}`}
               >
-                {candidatura.stato}
+                {simplifiedStato}
               </span>
             </div>
             <h2
@@ -390,11 +493,65 @@ export function CandidaturaDetailModal({
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
           {/* Candidate Metadata */}
           <section className="rounded-xl border border-slate-200 bg-slate-50/70 divide-y divide-slate-200 text-sm">
+            <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+              <span className="text-xs font-medium text-slate-500">Completezza candidatura</span>
+              <span
+                className={`text-xs font-bold inline-flex items-center gap-1.5 ${
+                  isCandidateCompleteForApproval ? 'text-emerald-700' : 'text-amber-800'
+                }`}
+              >
+                {isCandidateCompleteForApproval ? (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Completa (dati, +39 e consensi verificabili)</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Da verificare (dati o cellulare +39 incompleti / pregressi)</span>
+                  </>
+                )}
+              </span>
+            </div>
             <div className="p-3.5 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="text-xs font-medium text-slate-500">Email Fantaleghe</span>
               <span className="font-semibold text-[#0B1F4D] break-all">
                 {candidatura.emailFantaleghe}
               </span>
+            </div>
+            <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <span className="text-xs font-medium text-slate-500 inline-flex items-center gap-1.5">
+                <Phone className="w-3.5 h-3.5 text-slate-400" />
+                <span>Numero di cellulare</span>
+              </span>
+              {candidatura.cellulare ? (
+                <div className="flex items-center gap-2">
+                  <span className="font-mono-tabular font-bold text-[#0B1F4D]">
+                    {candidatura.cellulare}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyPhone}
+                    className="min-h-[32px] px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold text-[#0B1F4D] hover:bg-slate-100 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedPhone ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-700" />
+                        <span>Copiato</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copia</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs font-semibold text-amber-800">
+                  Non presente (candidatura precedente o incompleta)
+                </span>
+              )}
             </div>
             <div className="p-3.5 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="text-xs font-medium text-slate-500">Squadra attuale</span>
@@ -407,9 +564,12 @@ export function CandidaturaDetailModal({
               </span>
             </div>
             <div className="p-3.5 flex flex-col sm:flex-row sm:justify-between gap-1">
-              <span className="text-xs font-medium text-slate-500">Privacy accettata</span>
+              <span className="text-xs font-medium text-slate-500">Privacy &amp; Regolamento</span>
               <span className="text-xs font-semibold text-emerald-700">
-                {candidatura.consensoPrivacy ? 'Sì' : 'No'} · Informativa v{candidatura.versioneInformativa}
+                Privacy v{candidatura.versioneInformativa}
+                {candidatura.regolamentoAccettatoNote
+                  ? ` · ${candidatura.regolamentoAccettatoNote}`
+                  : ''}
               </span>
             </div>
             {candidatura.note && (
@@ -445,82 +605,58 @@ export function CandidaturaDetailModal({
               </div>
             )}
 
-            {/* Quick Actions */}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => handleSave('APPROVATO', 'Candidatura approvata dallo staff')}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold hover:bg-indigo-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Approva
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => handleSave('DA CONTATTARE', 'Da contattare sul gruppo provvisorio')}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold hover:bg-amber-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Da contattare
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => handleSave('INVITO INVIATO', 'Invito Fantaleghe inviato via email')}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-xs font-semibold hover:bg-sky-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Invito inviato
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  handleSave('DA COMPLETARE', 'In attesa completamento rosa su Fantaleghe')
-                }
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-orange-50 border border-orange-200 text-orange-900 text-xs font-semibold hover:bg-orange-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Da completare
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => handleSave('COMPLETATO', 'Ingresso completato e verificato')}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Segna completato
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => handleSave('RESPINTO', 'Candidatura respinta dallo staff')}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-semibold hover:bg-red-100 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                Respingi
-              </button>
+            {/* Quick Actions — 3 Stati Principali Semplificati */}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    handleSave('DA CONTATTARE', 'Pratica contrassegnata Da verificare dallo staff')
+                  }
+                  className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 ${
+                    simplifiedStato === 'DA VERIFICARE'
+                      ? 'bg-amber-700 border-amber-700 text-white'
+                      : 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                  }`}
+                >
+                  Da verificare
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => handleSave('COMPLETATO', 'Ingresso completato e verificato')}
+                  className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 ${
+                    simplifiedStato === 'COMPLETATO'
+                      ? 'bg-emerald-700 border-emerald-700 text-white'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                  }`}
+                >
+                  Completato
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => handleSave('RESPINTO', 'Candidatura respinta dallo staff')}
+                  className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 ${
+                    simplifiedStato === 'RESPINTO'
+                      ? 'bg-red-700 border-red-700 text-white'
+                      : 'bg-red-50 border-red-200 text-red-800 hover:bg-red-100'
+                  }`}
+                >
+                  Respinto
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Lo stato visibile passa a <strong>COMPLETATO</strong> quando la candidatura è completata con autorizzazione WhatsApp attiva (stato tecnico corrente:{' '}
+                <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
+                  {candidatura.stato}
+                </span>
+                ).
+              </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="admin-stato-select"
-                  className="block text-xs font-semibold text-slate-700 mb-1.5"
-                >
-                  Stato manuale
-                </label>
-                <select
-                  id="admin-stato-select"
-                  value={statoNuovo}
-                  onChange={(e) => setStatoNuovo(e.target.value as CandidaturaStato)}
-                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20"
-                >
-                  {STATI_CANDIDATURA.map((st) => (
-                    <option key={st} value={st}>
-                      {st}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
+            <div className="space-y-3">
               <div>
                 <label
                   htmlFor="admin-nota-operazione"
@@ -538,6 +674,32 @@ export function CandidaturaDetailModal({
                   className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20"
                 />
               </div>
+
+              <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                <summary className="cursor-pointer text-xs font-semibold text-slate-600 hover:text-[#0B1F4D]">
+                  Stato tecnico avanzato Apps Script (opzionale per invii automatici)
+                </summary>
+                <div className="mt-3">
+                  <label
+                    htmlFor="admin-stato-select"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    Stato operativo dettagliato
+                  </label>
+                  <select
+                    id="admin-stato-select"
+                    value={statoNuovo}
+                    onChange={(e) => setStatoNuovo(e.target.value as CandidaturaStato)}
+                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20"
+                  >
+                    {STATI_CANDIDATURA.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </details>
             </div>
 
             <div>
@@ -781,11 +943,27 @@ export function CandidaturaDetailModal({
               </div>
             )}
 
-            <details className="pt-1">
+            <details className="pt-1" open={templateKey === 'APPROVAZIONE'}>
               <summary className="cursor-pointer text-xs font-semibold text-[#0284C7] hover:text-[#0B1F4D]">
-                Mostra bozza manuale di riserva (copia o client email)
+                Bozza email manuale e invito WhatsApp ufficiale (copia testo, HTML Gmail o client email)
               </summary>
-              <div className="mt-2.5 space-y-2.5">
+              <div className="mt-2.5 space-y-3">
+                {templateKey === 'APPROVAZIONE' && !isCandidateCompleteForApproval && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    Candidatura contrassegnata <strong>Da verificare</strong>: il link WhatsApp ufficiale non viene inserito nella bozza finché i dati obbligatori (+39 incluso) non sono verificati.
+                  </div>
+                )}
+
+                {templateKey === 'APPROVAZIONE' &&
+                  isCandidateCompleteForApproval &&
+                  !draft.hasOfficialWhatsappLink && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      Link WhatsApp ufficiale non configurato in{' '}
+                      <span className="font-mono-tabular">Configurazione</span> o{' '}
+                      <span className="font-mono-tabular">Accessi WhatsApp</span>: verrà mostrato nella bozza appena configurato.
+                    </div>
+                  )}
+
                 <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-700 space-y-1.5">
                   <p>
                     <strong>A:</strong> {draft.to}
@@ -796,6 +974,22 @@ export function CandidaturaDetailModal({
                   <pre className="pt-1.5 border-t border-slate-100 whitespace-pre-wrap font-sans text-xs text-slate-600">
                     {draft.body}
                   </pre>
+
+                  {draft.hasOfficialWhatsappLink && selectedWaGroupLink && (
+                    <div className="mt-2 pt-3 border-t border-slate-100 flex flex-col items-start gap-2">
+                      <span className="text-[11px] font-semibold text-emerald-800">
+                        Anteprima pulsante Gmail / mobile incluso nella versione HTML:
+                      </span>
+                      <a
+                        href={selectedWaGroupLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center px-4 py-2.5 rounded-lg bg-emerald-700 text-white text-xs font-bold tracking-wide"
+                      >
+                        ENTRA NEL GRUPPO WHATSAPP UFFICIALE
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -807,7 +1001,7 @@ export function CandidaturaDetailModal({
                     {copiedEmail ? (
                       <>
                         <Check className="w-3.5 h-3.5 text-emerald-700" />
-                        <span>Bozza copiata</span>
+                        <span>Testo copiato</span>
                       </>
                     ) : (
                       <>
@@ -816,6 +1010,26 @@ export function CandidaturaDetailModal({
                       </>
                     )}
                   </button>
+
+                  {draft.htmlBody && (
+                    <button
+                      type="button"
+                      onClick={handleCopyHtmlDraft}
+                      className="min-h-[40px] px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedHtmlEmail ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-700" />
+                          <span>Email HTML copiata (incolla in Gmail)</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copia email HTML (Gmail)</span>
+                        </>
+                      )}
+                    </button>
+                  )}
 
                   <a
                     href={draft.mailtoHref}

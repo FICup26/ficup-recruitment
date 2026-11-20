@@ -35,21 +35,22 @@ import {
   fetchAmministratori,
   fetchWhatsappAutorizzazioniMap,
   getAdminConfig,
+  isEffectiveWaAuthorized,
+  resolveSimplifiedCandidaturaStato,
   saveAdminConfig,
-  STATI_CANDIDATURA,
   subscribeCandidature,
   verifyAdminAuthorization,
   type AmministratoreRecord,
   type CandidaturaRecord,
-  type CandidaturaStato,
   type ConfigurazionePublica,
+  type SimplifiedCandidaturaStato,
   type WhatsappAutorizzazioneRecord,
 } from '../lib/firestore';
 import { parseFirestoreUiError } from '../lib/notifications';
 import { AdminDocumentiSection } from './AdminDocumentiSection';
 import { AdminWhatsappSection } from './AdminWhatsappSection';
 import { AdminZonaVarSection } from './AdminZonaVarSection';
-import { CandidaturaDetailModal, statusBadgeStyle } from './CandidaturaDetailModal';
+import { CandidaturaDetailModal, simplifiedStatusBadgeStyle } from './CandidaturaDetailModal';
 import { FicupLogo } from './FicupLogo';
 import { SuperAdminDiagnosticPanel } from './SuperAdminDiagnosticPanel';
 
@@ -67,7 +68,7 @@ type AdminTab =
   | 'amministratori'
   | 'diagnostica';
 
-type CandidaturaFilter = CandidaturaStato | 'TUTTE' | 'AUTORIZZATI_WA' | 'SENZA_SQUADRA';
+type CandidaturaFilter = 'TUTTE' | SimplifiedCandidaturaStato;
 
 function formatShortDate(date: Date | null): string {
   if (!date) {
@@ -142,6 +143,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const [appsScriptProbeLoading, setAppsScriptProbeLoading] = useState(false);
   const [diagLoading, setDiagLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<'email' | 'uid' | null>(null);
+  const [copiedPhoneRowId, setCopiedPhoneRowId] = useState<string | null>(null);
 
   useEffect(() => {
     setCfgForm(publicConfig);
@@ -369,6 +371,19 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     }
   };
 
+  const copyCandidatePhone = async (rowId: string, phone: string) => {
+    if (!phone || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(phone);
+      setCopiedPhoneRowId(rowId);
+      window.setTimeout(() => setCopiedPhoneRowId(null), 2000);
+    } catch {
+      // Ignore
+    }
+  };
+
   const handleSaveConfig = async (e: FormEvent) => {
     e.preventDefault();
     if (!user?.email) {
@@ -391,36 +406,33 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     }
   };
 
-  const isWaAuthorized = (c: CandidaturaRecord): boolean => {
-    const authRec = waAuthMap[c.id];
-    if (authRec?.statoAutorizzazione === 'REVOCATO') {
-      return false;
-    }
-    if (authRec?.statoAutorizzazione === 'AUTORIZZATO') {
-      return true;
-    }
-    return c.stato === 'COMPLETATO';
-  };
-
   const metrics = useMemo(() => {
     const total = candidature.length;
-    const nuove = candidature.filter((c) => c.stato === 'NUOVO').length;
-    const inAttesa = candidature.filter(
-      (c) => c.stato === 'DA CONTATTARE' || c.stato === 'APPROVATO'
-    ).length;
-    const invitiInviati = candidature.filter((c) => c.stato === 'INVITO INVIATO').length;
-    const daCompletare = candidature.filter((c) => c.stato === 'DA COMPLETARE').length;
-    const completate = candidature.filter((c) => c.stato === 'COMPLETATO').length;
-    const respinte = candidature.filter((c) => c.stato === 'RESPINTO').length;
-    const autorizzatiWa = candidature.filter((c) => isWaAuthorized(c)).length;
+    let daVerificare = 0;
+    let completato = 0;
+    let respinto = 0;
+    let autorizzatiWa = 0;
+
+    for (const c of candidature) {
+      const waAuth = waAuthMap[c.id];
+      const simplified = resolveSimplifiedCandidaturaStato(c, waAuth);
+      if (simplified === 'COMPLETATO') {
+        completato += 1;
+      } else if (simplified === 'RESPINTO') {
+        respinto += 1;
+      } else {
+        daVerificare += 1;
+      }
+      if (isEffectiveWaAuthorized(c, waAuth)) {
+        autorizzatiWa += 1;
+      }
+    }
+
     return {
       total,
-      nuove,
-      inAttesa,
-      invitiInviati,
-      daCompletare,
-      completate,
-      respinte,
+      daVerificare,
+      completato,
+      respinto,
       autorizzatiWa,
     };
   }, [candidature, waAuthMap]);
@@ -428,11 +440,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const filteredCandidature = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return candidature.filter((c) => {
-      if (stateFilter === 'AUTORIZZATI_WA') {
-        if (!isWaAuthorized(c)) return false;
-      } else if (stateFilter === 'SENZA_SQUADRA') {
-        if (waAuthMap[c.id]?.squadraAssegnataZonaVar) return false;
-      } else if (stateFilter !== 'TUTTE' && c.stato !== stateFilter) {
+      const simplified = resolveSimplifiedCandidaturaStato(c, waAuthMap[c.id]);
+      if (stateFilter !== 'TUTTE' && simplified !== stateFilter) {
         return false;
       }
       if (!q) {
@@ -444,6 +453,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         c.nome.toLowerCase().includes(q) ||
         c.cognome.toLowerCase().includes(q) ||
         c.emailFantaleghe.toLowerCase().includes(q) ||
+        c.cellulare.toLowerCase().includes(q) ||
         c.nomeSquadra.toLowerCase().includes(q) ||
         assignedTeam.toLowerCase().includes(q)
       );
@@ -792,7 +802,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         {/* TAB 1: CANDIDATURE */}
         {activeTab === 'candidature' && (
           <div className="space-y-6">
-            {/* 8 KPI Metric Cards */}
+            {/* 4 KPI Metric Cards Semplificate */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="bg-white border border-slate-200 rounded-2xl p-4">
                 <p className="text-xs font-medium text-slate-500">Totale</p>
@@ -801,50 +811,26 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                 </p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Nuove</p>
-                <p className="mt-1 text-2xl font-extrabold text-blue-700 font-mono-tabular">
-                  {metrics.nuove}
-                </p>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">In attesa</p>
+                <p className="text-xs font-medium text-slate-500">Da verificare</p>
                 <p className="mt-1 text-2xl font-extrabold text-amber-700 font-mono-tabular">
-                  {metrics.inAttesa}
+                  {metrics.daVerificare}
                 </p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Inviti inviati</p>
-                <p className="mt-1 text-2xl font-extrabold text-sky-700 font-mono-tabular">
-                  {metrics.invitiInviati}
-                </p>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Da completare</p>
-                <p className="mt-1 text-2xl font-extrabold text-orange-700 font-mono-tabular">
-                  {metrics.daCompletare}
-                </p>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Completate</p>
+                <p className="text-xs font-medium text-slate-500">Completato</p>
                 <p className="mt-1 text-2xl font-extrabold text-emerald-700 font-mono-tabular">
-                  {metrics.completate}
+                  {metrics.completato}
                 </p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Respinte</p>
+                <p className="text-xs font-medium text-slate-500">Respinto</p>
                 <p className="mt-1 text-2xl font-extrabold text-red-700 font-mono-tabular">
-                  {metrics.respinte}
-                </p>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                <p className="text-xs font-medium text-slate-500">Autorizzati WA</p>
-                <p className="mt-1 text-2xl font-extrabold text-emerald-800 font-mono-tabular">
-                  {metrics.autorizzatiWa}
+                  {metrics.respinto}
                 </p>
               </div>
             </div>
 
-            {/* Search + State Filters */}
+            {/* Search + Simplified 3-State Filters */}
             <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -852,58 +838,55 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                   type="search"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Cerca per codice FICUP26, nome, cognome, email Fantaleghe o squadra..."
+                  placeholder="Cerca per codice FICUP26, nome, cognome, cellulare, email Fantaleghe o squadra..."
                   className="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20"
                 />
               </div>
 
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setStateFilter('TUTTE')}
-                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                     stateFilter === 'TUTTE'
                       ? 'bg-[#0B1F4D] text-white'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  TUTTE
+                  TUTTE ({metrics.total})
                 </button>
-                {STATI_CANDIDATURA.map((st) => (
-                  <button
-                    key={st}
-                    type="button"
-                    onClick={() => setStateFilter(st)}
-                    className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      stateFilter === st
-                        ? 'bg-[#0B1F4D] text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {st}
-                  </button>
-                ))}
                 <button
                   type="button"
-                  onClick={() => setStateFilter('AUTORIZZATI_WA')}
-                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    stateFilter === 'AUTORIZZATI_WA'
+                  onClick={() => setStateFilter('DA VERIFICARE')}
+                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    stateFilter === 'DA VERIFICARE'
+                      ? 'bg-amber-700 text-white'
+                      : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  DA VERIFICARE ({metrics.daVerificare})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStateFilter('COMPLETATO')}
+                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    stateFilter === 'COMPLETATO'
                       ? 'bg-emerald-700 text-white'
                       : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
                   }`}
                 >
-                  AUTORIZZATI WA
+                  COMPLETATO ({metrics.completato})
                 </button>
                 <button
                   type="button"
-                  onClick={() => setStateFilter('SENZA_SQUADRA')}
-                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    stateFilter === 'SENZA_SQUADRA'
-                      ? 'bg-[#C69214] text-white'
-                      : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                  onClick={() => setStateFilter('RESPINTO')}
+                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    stateFilter === 'RESPINTO'
+                      ? 'bg-red-700 text-white'
+                      : 'bg-red-50 text-red-800 border border-red-200 hover:bg-red-100'
                   }`}
                 >
-                  SENZA SQUADRA ZONA VAR
+                  RESPINTO ({metrics.respinto})
                 </button>
               </div>
             </div>
@@ -933,7 +916,9 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
               <>
                 {/* Mobile Cards View */}
                 <div className="lg:hidden space-y-3">
-                  {filteredCandidature.map((item) => (
+                  {filteredCandidature.map((item) => {
+                    const simplifiedStato = resolveSimplifiedCandidaturaStato(item, waAuthMap[item.id]);
+                    return (
                     <article
                       key={item.id}
                       className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3"
@@ -948,18 +933,49 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                           </h3>
                         </div>
                         <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold shrink-0 ${statusBadgeStyle(
-                            item.stato
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold shrink-0 ${simplifiedStatusBadgeStyle(
+                            simplifiedStato
                           )}`}
                         >
-                          {item.stato}
+                          {simplifiedStato}
                         </span>
                       </div>
 
-                      <div className="text-xs text-slate-600 space-y-1">
+                      <div className="text-xs text-slate-600 space-y-1.5">
                         <p className="break-all">
                           <strong>Email:</strong> {item.emailFantaleghe}
                         </p>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-mono-tabular">
+                            <strong>Cellulare:</strong>{' '}
+                            {item.cellulare ? (
+                              <span className="text-[#0B1F4D] font-semibold">
+                                {item.cellulare}
+                              </span>
+                            ) : (
+                              <span className="text-amber-800">Non presente</span>
+                            )}
+                          </p>
+                          {item.cellulare && (
+                            <button
+                              type="button"
+                              onClick={() => copyCandidatePhone(item.id, item.cellulare)}
+                              className="min-h-[28px] px-2 py-0.5 rounded-md border border-slate-300 bg-slate-50 text-[11px] font-semibold text-[#0B1F4D] inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              {copiedPhoneRowId === item.id ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-700" />
+                                  <span>Copiato</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copia</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
                         <p>
                           <strong>Squadra:</strong> {item.nomeSquadra}
                         </p>
@@ -976,7 +992,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                         DETTAGLI
                       </button>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Desktop Table View */}
@@ -987,6 +1004,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                         <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
                           <th className="py-3 px-4">Codice</th>
                           <th className="py-3 px-4">Nome e cognome</th>
+                          <th className="py-3 px-4">Cellulare</th>
                           <th className="py-3 px-4">Email Fantaleghe</th>
                           <th className="py-3 px-4">Nome squadra</th>
                           <th className="py-3 px-4">Data</th>
@@ -995,13 +1013,41 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 text-sm">
-                        {filteredCandidature.map((item) => (
+                        {filteredCandidature.map((item) => {
+                          const simplifiedStato = resolveSimplifiedCandidaturaStato(
+                            item,
+                            waAuthMap[item.id]
+                          );
+                          return (
                           <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-3 px-4 font-mono-tabular text-xs font-bold text-[#0B1F4D] whitespace-nowrap">
                               {item.codiceCandidatura}
                             </td>
                             <td className="py-3 px-4 font-semibold text-slate-900 whitespace-nowrap">
                               {item.nome} {item.cognome}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {item.cellulare ? (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <span className="font-mono-tabular text-xs font-semibold text-[#0B1F4D]">
+                                    {item.cellulare}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyCandidatePhone(item.id, item.cellulare)}
+                                    title="Copia numero di cellulare"
+                                    className="p-1 rounded border border-slate-200 text-slate-500 hover:text-[#0B1F4D] hover:bg-slate-100 cursor-pointer"
+                                  >
+                                    {copiedPhoneRowId === item.id ? (
+                                      <Check className="w-3 h-3 text-emerald-700" />
+                                    ) : (
+                                      <Copy className="w-3 h-3" />
+                                    )}
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-amber-800">Assente</span>
+                              )}
                             </td>
                             <td className="py-3 px-4 text-slate-600 break-all">
                               {item.emailFantaleghe}
@@ -1012,11 +1058,11 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                             </td>
                             <td className="py-3 px-4 whitespace-nowrap">
                               <span
-                                className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${statusBadgeStyle(
-                                  item.stato
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${simplifiedStatusBadgeStyle(
+                                  simplifiedStato
                                 )}`}
                               >
-                                {item.stato}
+                                {simplifiedStato}
                               </span>
                             </td>
                             <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -1029,7 +1075,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                               </button>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
