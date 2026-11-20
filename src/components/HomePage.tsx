@@ -324,41 +324,39 @@ export function HomePage({
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.08, ease: 'easeOut' }}
-              className="col-span-7 md:col-span-7 md:col-start-1 md:row-start-2 min-w-0 font-display text-[1.45rem] sm:text-4xl md:text-5xl lg:text-[3.4rem] font-black tracking-tight text-[#0B1F4D] leading-[1.08] text-balance"
+              className="col-span-7 md:col-span-7 md:col-start-1 md:row-start-2 min-w-0 font-display text-[1.6rem] sm:text-[2.2rem] md:text-5xl lg:text-[3.7rem] font-black tracking-tight text-[#0B1F4D] leading-[1.06] text-balance"
             >
               NON È SOLTANTO FANTACALCIO. È UNA PASSIONE CHE UNISCE L&apos;ITALIA.
             </motion.h1>
 
-            {/* Right: Image 1 strictly to the RIGHT of the Hero Title on Mobile and Desktop — zero glow */}
-            {!heroFischiettoFailed && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={
-                  prefersReducedMotion
-                    ? { opacity: 1, scale: 1 }
-                    : { opacity: 1, scale: 1, y: [-3, 3, -3] }
-                }
-                transition={
-                  prefersReducedMotion
-                    ? { duration: 0.4 }
-                    : {
-                        opacity: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
-                        scale: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
-                        y: { duration: 5, repeat: Infinity, ease: 'easeInOut' },
-                      }
-                }
-                className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
-              >
-                <img
-                  src={HERO_FISCHIETTO_URL}
-                  alt="Il Fischietto FICUP"
-                  loading="eager"
-                  referrerPolicy="no-referrer"
-                  onError={() => setHeroFischiettoFailed(true)}
-                  className="w-full max-w-[165px] sm:max-w-[250px] md:max-w-[330px] lg:max-w-[400px] xl:max-w-[430px] h-auto object-contain rounded-2xl select-none"
-                />
-              </motion.div>
-            )}
+            {/* Right: Attached Animated Video asset strictly to the RIGHT of the Hero Title on Mobile and Desktop */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={
+                prefersReducedMotion
+                  ? { opacity: 1, scale: 1 }
+                  : { opacity: 1, scale: 1, y: [-3, 3, -3] }
+              }
+              transition={
+                prefersReducedMotion
+                  ? { duration: 0.4 }
+                  : {
+                      opacity: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
+                      scale: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
+                      y: { duration: 5, repeat: Infinity, ease: 'easeInOut' },
+                    }
+              }
+              className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
+            >
+              <video
+                src="/assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4"
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl border-2 border-[#D4AF37] shadow-[0_20px_50px_rgba(11,31,77,0.25),0_0_25px_rgba(212,175,55,0.28)] select-none"
+              />
+            </motion.div>
 
             {/* Description + CTAs (Full width on mobile below Title+Image row; Left column on desktop) */}
             <div className="col-span-12 md:col-span-7 md:col-start-1 md:row-start-3 min-w-0 space-y-5 sm:space-y-6">
