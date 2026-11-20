@@ -332,20 +332,12 @@ export function HomePage({
 
             {/* Right: Attached Animated Video asset strictly to the RIGHT of the Hero Title on Mobile and Desktop */}
             <motion.div
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={
-                prefersReducedMotion
-                  ? { opacity: 1, scale: 1 }
-                  : { opacity: 1, scale: 1, y: [-3, 3, -3] }
-              }
+              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 28, scale: 0.93 }}
+              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
               transition={
                 prefersReducedMotion
-                  ? { duration: 0.4 }
-                  : {
-                      opacity: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
-                      scale: { duration: 0.5, delay: 0.12, ease: 'easeOut' },
-                      y: { duration: 5, repeat: Infinity, ease: 'easeInOut' },
-                    }
+                  ? { duration: 0.3 }
+                  : { duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }
               }
               className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
             >
