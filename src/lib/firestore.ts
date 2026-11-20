@@ -89,6 +89,10 @@ export interface CandidaturaRecord {
   noteInterne: string;
   consensoPrivacy: boolean;
   versioneInformativa: string;
+  archiviata: boolean;
+  archiviataAt: Date | null;
+  archiviataByUid: string;
+  archiviataByEmail: string;
   createdAt: Date | null;
   updatedAt: Date | null;
 }
@@ -240,32 +244,148 @@ export function generateCandidaturaCode(): string {
   return `FICUP26-${suffix}`;
 }
 
-const ITALIAN_MOBILE_REGEX = /^\+393\d{8,9}$/;
+const ITALIAN_MOBILE_REGEX = /^\+393[1-9]\d{8}$/;
 const PHONE_NOTE_TAG_REGEX = /^\[Cellulare:\s*([^\]]+)\]\s*$/i;
 const REG_NOTE_TAG_REGEX = /^\[Regolamento FICUP 26\/27:\s*([^\]]+)\]\s*$/i;
 
+const BLOCKED_DUMMY_MOBILE_NUMBERS = new Set([
+  '320000000',
+  '3200000000',
+  '3333333333',
+  '3000000000',
+  '3111111111',
+  '3222222222',
+  '3444444444',
+  '3555555555',
+  '3666666666',
+  '3777777777',
+  '3888888888',
+  '3999999999',
+  '3401234567',
+  '3471234567',
+  '3331234567',
+  '3201234567',
+  '3123456789',
+  '3987654321',
+]);
+
+const ARTIFICIAL_SEQUENCE_SUBSTRINGS = [
+  '012345',
+  '123456',
+  '234567',
+  '345678',
+  '456789',
+  '567890',
+  '987654',
+  '876543',
+  '765432',
+  '654321',
+  '543210',
+  '098765',
+];
+
 export function normalizeAndValidateItalianPhone(raw: string): string {
-  const cleaned = raw.trim().replace(/[\s\-().]/g, '');
+  const cleaned = raw.trim().replace(/[\s\-()./]/g, '');
   if (!cleaned) {
     throw new Error('Inserire un numero di cellulare obbligatorio con prefisso italiano +39.');
   }
 
+  if (!/^\+?\d+$/.test(cleaned)) {
+    throw new Error(
+      'Il numero di cellulare può contenere solo cifre, prefisso +39 e separatori standard (spazi o trattini).'
+    );
+  }
+
   let normalized = cleaned;
-  if (normalized.startsWith('0039')) {
+  if (normalized.startsWith('00')) {
+    if (!normalized.startsWith('0039')) {
+      throw new Error(
+        'Sono ammessi esclusivamente numeri di cellulare italiani con prefisso internazionale +39.'
+      );
+    }
     normalized = `+39${normalized.slice(4)}`;
-  } else if (/^3\d{8,9}$/.test(normalized)) {
-    normalized = `+39${normalized}`;
-  } else if (/^393\d{8,9}$/.test(normalized)) {
+  } else if (normalized.startsWith('+')) {
+    if (!normalized.startsWith('+39')) {
+      throw new Error(
+        'Sono ammessi esclusivamente numeri di cellulare italiani con prefisso internazionale +39.'
+      );
+    }
+  } else if (normalized.startsWith('39') && normalized.length >= 11) {
     normalized = `+${normalized}`;
+  } else {
+    normalized = `+39${normalized}`;
+  }
+
+  const subscriber = normalized.slice(3);
+
+  if (/^(\d)\1+$/.test(subscriber) || /^(\d)\1+$/.test(cleaned.replace(/^\+/, ''))) {
+    throw new Error(
+      'Numero non valido: non sono ammessi numeri composti da cifre tutte uguali.'
+    );
+  }
+
+  if (subscriber.startsWith('0')) {
+    throw new Error(
+      'Inserire un numero di cellulare italiano (prefisso mobile che inizia con 3), non un numero fisso.'
+    );
+  }
+
+  if (BLOCKED_DUMMY_MOBILE_NUMBERS.has(subscriber)) {
+    throw new Error(
+      'Il numero inserito risulta un numero di esempio o non reale. Inserisci un cellulare italiano autentico.'
+    );
+  }
+
+  if (!subscriber.startsWith('3')) {
+    throw new Error(
+      'Numero di cellulare italiano non valido: dopo +39 deve iniziare con 3 (es. +39 347 892 4156).'
+    );
+  }
+
+  if (subscriber.length !== 10) {
+    throw new Error(
+      'Il numero di cellulare italiano deve contenere esattamente 10 cifre dopo +39 (es. +39 347 892 4156).'
+    );
   }
 
   if (!ITALIAN_MOBILE_REGEX.test(normalized)) {
     throw new Error(
-      'Inserire un numero di cellulare italiano valido con prefisso +39 (es. +39 340 123 4567).'
+      'Prefisso mobile italiano non riconosciuto. Verifica le cifre inserite dopo +39.'
     );
   }
 
-  const subscriber = normalized.slice(3);
+  const distinctDigits = new Set(subscriber.split('')).size;
+  if (distinctDigits <= 2) {
+    throw new Error(
+      'Il numero inserito contiene troppe cifre ripetute e non sembra un cellulare italiano reale.'
+    );
+  }
+
+  // Reject 7+ identical consecutive digits anywhere, or 6+ identical digits at the end (catches 3200000000 / 3330000000 / 3471111111 without blocking valid 333 333 xxxx)
+  if (/(\d)\1{6,}/.test(subscriber) || /(\d)\1{5}$/.test(subscriber)) {
+    throw new Error(
+      'Numero non valido: sequenza di cifre ripetute non ammessa.'
+    );
+  }
+
+  // Reject repeating 2-digit alternating loops like 3412121212
+  if (/^\d{2}(\d{2})\1{3}$/.test(subscriber)) {
+    throw new Error(
+      'Numero non valido: sequenza ripetitiva artificiale non ammessa.'
+    );
+  }
+
+  const tailSevenDigits = subscriber.slice(3);
+  if (
+    ARTIFICIAL_SEQUENCE_SUBSTRINGS.some(
+      (seq) => subscriber.includes(seq) || tailSevenDigits.includes(seq)
+    )
+  ) {
+    throw new Error(
+      'Numero non valido: non sono ammesse sequenze numeriche artificiali o di test (es. 1234567).'
+    );
+  }
+
   return `+39 ${subscriber.slice(0, 3)} ${subscriber.slice(3, 6)} ${subscriber.slice(6)}`;
 }
 
@@ -596,6 +716,10 @@ function mapCandidaturaDoc(id: string, data: Record<string, unknown>): Candidatu
     noteInterne: String(data.noteInterne ?? ''),
     consensoPrivacy,
     versioneInformativa: String(data.versioneInformativa ?? ''),
+    archiviata: Boolean(data.archiviata === true),
+    archiviataAt: toDateOrNull(data.archiviataAt),
+    archiviataByUid: String(data.archiviataByUid ?? ''),
+    archiviataByEmail: String(data.archiviataByEmail ?? ''),
     createdAt: toDateOrNull(data.createdAt),
     updatedAt: toDateOrNull(data.updatedAt),
   };
@@ -661,6 +785,89 @@ export async function updateCandidaturaByAdmin(params: {
       createdAt: serverTimestamp(),
     });
   }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `candidature/${params.candidaturaId}`);
+  }
+}
+
+export async function archiveCandidaturaByAdmin(params: {
+  candidaturaId: string;
+  codiceCandidatura: string;
+  statoCorrente: CandidaturaStato;
+  adminUser: User;
+}): Promise<void> {
+  const firestore = requireDb();
+  if (!params.adminUser.email) {
+    throw new Error('Account amministratore privo di indirizzo email verificato.');
+  }
+
+  const candidaturaRef = doc(firestore, 'candidature', params.candidaturaId);
+  const storicoRef = doc(collection(firestore, 'storico_operazioni'));
+  const batch = writeBatch(firestore);
+
+  batch.update(candidaturaRef, {
+    archiviata: true,
+    archiviataAt: serverTimestamp(),
+    archiviataByUid: params.adminUser.uid,
+    archiviataByEmail: params.adminUser.email,
+    updatedAt: serverTimestamp(),
+  });
+
+  batch.set(storicoRef, {
+    candidaturaId: params.candidaturaId,
+    codiceCandidatura: params.codiceCandidatura,
+    statoPrecedente: params.statoCorrente,
+    statoNuovo: params.statoCorrente,
+    notaOperazione:
+      "Candidatura archiviata dall'area admin (rimossa dall'elenco principale e spostata in Archiviate; dati e storico integralmente conservati).",
+    adminUid: params.adminUser.uid,
+    adminEmail: params.adminUser.email,
+    createdAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `candidature/${params.candidaturaId}`);
+  }
+}
+
+export async function restoreCandidaturaByAdmin(params: {
+  candidaturaId: string;
+  codiceCandidatura: string;
+  statoCorrente: CandidaturaStato;
+  adminUser: User;
+}): Promise<void> {
+  const firestore = requireDb();
+  if (!params.adminUser.email) {
+    throw new Error('Account amministratore privo di indirizzo email verificato.');
+  }
+
+  const candidaturaRef = doc(firestore, 'candidature', params.candidaturaId);
+  const storicoRef = doc(collection(firestore, 'storico_operazioni'));
+  const batch = writeBatch(firestore);
+
+  batch.update(candidaturaRef, {
+    archiviata: false,
+    archiviataAt: null,
+    archiviataByUid: '',
+    archiviataByEmail: '',
+    updatedAt: serverTimestamp(),
+  });
+
+  batch.set(storicoRef, {
+    candidaturaId: params.candidaturaId,
+    codiceCandidatura: params.codiceCandidatura,
+    statoPrecedente: params.statoCorrente,
+    statoNuovo: params.statoCorrente,
+    notaOperazione: `Candidatura ripristinata nell'elenco principale dalla sezione Archiviate (stato originale conservato: ${params.statoCorrente}).`,
+    adminUid: params.adminUser.uid,
+    adminEmail: params.adminUser.email,
+    createdAt: serverTimestamp(),
+  });
 
   try {
     await batch.commit();

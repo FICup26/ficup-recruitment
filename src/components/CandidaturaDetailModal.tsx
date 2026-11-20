@@ -11,6 +11,7 @@ import {
   Mail,
   MessageCircle,
   Phone,
+  RotateCcw,
   Send,
   ShieldCheck,
   X,
@@ -55,6 +56,7 @@ interface CandidaturaDetailModalProps {
   operationalEmail?: string;
   onClose: () => void;
   onWhatsappAuthChanged?: () => void;
+  onRestoreCandidatura?: (candidatura: CandidaturaRecord) => Promise<void>;
 }
 
 export function statusBadgeStyle(stato: CandidaturaStato): string {
@@ -106,11 +108,13 @@ export function CandidaturaDetailModal({
   operationalEmail = FICUP_OPERATIONAL_EMAIL,
   onClose,
   onWhatsappAuthChanged,
+  onRestoreCandidatura,
 }: CandidaturaDetailModalProps) {
   const [statoNuovo, setStatoNuovo] = useState<CandidaturaStato>('NUOVO');
   const [noteInterne, setNoteInterne] = useState('');
   const [notaOperazione, setNotaOperazione] = useState('');
   const [saving, setSaving] = useState(false);
+  const [restoringFromModal, setRestoringFromModal] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -491,6 +495,43 @@ export function CandidaturaDetailModal({
 
         {/* Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
+          {candidatura.archiviata && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm text-amber-950">
+              <div className="space-y-1">
+                <p className="font-bold text-[#0B1F4D]">
+                  Candidatura archiviata nella sezione Archiviate
+                </p>
+                <p className="text-xs text-amber-900">
+                  Archiviata da{' '}
+                  <span className="font-semibold">{candidatura.archiviataByEmail || 'staff'}</span>{' '}
+                  il <span className="font-mono-tabular">{formatDateTime(candidatura.archiviataAt)}</span>. Tutti i dati e lo storico restano integralmente conservati.
+                </p>
+              </div>
+              {onRestoreCandidatura && (
+                <button
+                  type="button"
+                  disabled={restoringFromModal}
+                  onClick={async () => {
+                    setRestoringFromModal(true);
+                    try {
+                      await onRestoreCandidatura(candidatura);
+                    } finally {
+                      setRestoringFromModal(false);
+                    }
+                  }}
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  {restoringFromModal ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  )}
+                  <span>RIPRISTINA CANDIDATURA</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Candidate Metadata */}
           <section className="rounded-xl border border-slate-200 bg-slate-50/70 divide-y divide-slate-200 text-sm">
             <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">

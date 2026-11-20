@@ -30,8 +30,16 @@ export interface WaitingRoomServerStatus {
 interface AppsScriptApiResponse<T> {
   ok: boolean;
   code?: string;
+  status?: string;
   error?: string;
   data?: T;
+  completed?: boolean;
+  historyRecorded?: boolean;
+  historyRecovered?: boolean;
+  manualCompleted?: boolean;
+  emailConfirmed?: boolean;
+  stato?: CandidaturaStato;
+  linkWhatsappUfficiale?: string | null;
   stats?: {
     processed?: number;
     sent?: number;
@@ -41,6 +49,14 @@ interface AppsScriptApiResponse<T> {
 }
 
 const REQUEST_TIMEOUT_MS = 15000;
+
+function sanitizeHttpsWhatsappUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^https:\/\/[^\s]+$/i.test(trimmed) ? trimmed : null;
+}
 
 async function postToAppsScript<T>(payload: Record<string, unknown>): Promise<AppsScriptApiResponse<T>> {
   if (!isAppsScriptConfigured) {
@@ -73,6 +89,12 @@ async function postToAppsScript<T>(payload: Record<string, unknown>): Promise<Ap
       );
     }
 
+    if (typeof parsed !== 'object' || parsed === null || typeof parsed.ok !== 'boolean') {
+      throw new Error(
+        `Formato risposta non valido dal backend Apps Script (HTTP ${response.status}).`
+      );
+    }
+
     if (!response.ok && parsed.ok !== false) {
       throw new Error(`Errore HTTP ${response.status} dal backend Apps Script.`);
     }
@@ -101,11 +123,18 @@ export async function fetchWaitingRoomStatus(params: {
     emailFantaleghe: email,
   });
 
-  if (!res.ok || !res.data) {
+  if (!res.ok || !res.data || typeof res.data !== 'object') {
     throw new Error(res.error || 'Impossibile recuperare lo stato della candidatura.');
   }
 
-  return res.data;
+  return {
+    ...res.data,
+    linkWhatsappProvvisorio: sanitizeHttpsWhatsappUrl(res.data.linkWhatsappProvvisorio) ?? '',
+    linkWhatsappUfficiale:
+      res.data.stato === 'COMPLETATO'
+        ? sanitizeHttpsWhatsappUrl(res.data.linkWhatsappUfficiale)
+        : null,
+  };
 }
 
 export interface TriggerCandidaturaNotificationParams {
@@ -115,23 +144,49 @@ export interface TriggerCandidaturaNotificationParams {
   emailFantaleghe?: string;
 }
 
+export interface TriggerCandidaturaNotificationResult {
+  triggered: boolean;
+  sent: number;
+  code?: string;
+  status?: string;
+  emailConfirmed: boolean;
+  completed: boolean;
+  historyRecorded: boolean;
+  historyRecovered?: boolean;
+  manualCompleted?: boolean;
+  stato?: CandidaturaStato;
+  linkWhatsappUfficiale: string | null;
+  detail?: string;
+  canRetry: boolean;
+}
+
+const NON_RETRYABLE_CODES = new Set([
+  'FORBIDDEN_STATE',
+  'ARCHIVED',
+  'MANUAL_ADMIN_HISTORY',
+  'NOT_FOUND',
+  'UNAUTHORIZED',
+  'INVALID_INPUT',
+]);
+
 /**
- * Invia una segnalazione best-effort e protetta ad Apps Script affinché elabori subito
- * l'invio email idempotente senza attendere il trigger periodico.
- * - Admin: invia il Firebase Auth ID Token verificato lato server su Firestore
- * - Wizard candidato: invia prova di possesso (id + codiceCandidatura + emailFantaleghe)
- * Non lancia mai eccezioni bloccanti verso la UI: il trigger incrementale
- * di sicurezza garantisce comunque l'elaborazione asincrona.
+ * Invia una segnalazione protetta ad Apps Script affinché elabori l'invio email
+ * idempotente e, SOLO a conferma reale di email + storico + stato COMPLETATO,
+ * riconosca il completamento restituendo l'eventuale link al Gruppo WhatsApp Ufficiale.
  */
 export async function triggerCandidaturaNotification(
   params: TriggerCandidaturaNotificationParams
-): Promise<{
-  triggered: boolean;
-  sent: number;
-  detail?: string;
-}> {
+): Promise<TriggerCandidaturaNotificationResult> {
   if (!isAppsScriptConfigured || !params.candidaturaId) {
-    return { triggered: false, sent: 0 };
+    return {
+      triggered: false,
+      sent: 0,
+      emailConfirmed: false,
+      completed: false,
+      historyRecorded: false,
+      linkWhatsappUfficiale: null,
+      canRetry: false,
+    };
   }
 
   const payload: Record<string, unknown> = {
@@ -145,18 +200,74 @@ export async function triggerCandidaturaNotification(
     payload.codiceCandidatura = params.codiceCandidatura.trim().toUpperCase();
     payload.emailFantaleghe = params.emailFantaleghe.trim().toLowerCase();
   } else {
-    return { triggered: false, sent: 0 };
+    return {
+      triggered: false,
+      sent: 0,
+      emailConfirmed: false,
+      completed: false,
+      historyRecorded: false,
+      linkWhatsappUfficiale: null,
+      canRetry: false,
+    };
   }
 
   try {
     const res = await postToAppsScript<never>(payload);
+    const code = typeof res.code === 'string' ? res.code : undefined;
+    const status = typeof res.status === 'string' ? res.status : undefined;
+    const emailConfirmed = res.emailConfirmed === true;
+    const historyRecorded = res.historyRecorded === true;
+    const historyRecovered = res.historyRecovered === true;
+    const manualCompleted = res.manualCompleted === true;
+    const completed = Boolean(
+      res.ok === true &&
+        emailConfirmed &&
+        res.completed === true &&
+        historyRecorded &&
+        res.stato === 'COMPLETATO'
+    );
+    const linkWhatsappUfficiale = completed
+      ? sanitizeHttpsWhatsappUrl(res.linkWhatsappUfficiale)
+      : null;
+
+    const canRetry =
+      !completed &&
+      !manualCompleted &&
+      !(code && NON_RETRYABLE_CODES.has(code)) &&
+      !(status && NON_RETRYABLE_CODES.has(status));
+
+    let detail = typeof res.error === 'string' ? res.error : undefined;
+    if (!detail && res.ok === true && res.completed === true && !historyRecorded) {
+      detail =
+        'Il backend non ha confermato la registrazione nello storico operazioni (historyRecorded: false).';
+    }
+
     return {
       triggered: Boolean(res.ok),
       sent: Number(res.stats?.sent ?? 0),
-      detail: res.error,
+      code,
+      status,
+      emailConfirmed,
+      completed,
+      historyRecorded,
+      historyRecovered,
+      manualCompleted,
+      stato: res.stato,
+      linkWhatsappUfficiale,
+      detail,
+      canRetry,
     };
-  } catch {
-    return { triggered: false, sent: 0 };
+  } catch (err) {
+    return {
+      triggered: false,
+      sent: 0,
+      emailConfirmed: false,
+      completed: false,
+      historyRecorded: false,
+      linkWhatsappUfficiale: null,
+      canRetry: true,
+      detail: err instanceof Error ? err.message : 'Errore temporaneo nella comunicazione con il backend.',
+    };
   }
 }
 

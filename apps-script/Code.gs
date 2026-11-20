@@ -44,6 +44,27 @@ function sanitizeHttpsUrl_(url) {
   return /^https:\/\/[^\s]+$/i.test(str) ? str : '';
 }
 
+function getOfficialWhatsappLinkForCandidatura_(candidaturaId) {
+  var waAuth = candidaturaId ? fsGetDocument_('whatsapp_autorizzazioni', candidaturaId) : null;
+  if (waAuth) {
+    var authState = String(waAuth.statoAutorizzazione || '');
+    if (authState === 'REVOCATO' || authState === 'NON_AUTORIZZATO') {
+      return null;
+    }
+    var assigned = sanitizeHttpsUrl_(waAuth.linkAssegnato);
+    if (assigned) {
+      return assigned;
+    }
+  }
+
+  var privateCfg = fsGetDocument_('configurazione', 'private') || {};
+  var candidateOfficial =
+    (privateCfg.linkWhatsappUfficiale && String(privateCfg.linkWhatsappUfficiale).trim()) ||
+    getOfficialWhatsappFallback_() ||
+    '';
+  return sanitizeHttpsUrl_(candidateOfficial) || null;
+}
+
 function parseFirebaseJwtPayload_(token) {
   if (typeof token !== 'string' || token.length < 20 || token.length > 8192) {
     return null;
@@ -243,12 +264,7 @@ function handleWaitingRoomLookup_(body) {
   // Il link WhatsApp ufficiale viene letto e restituito SOLO se lo stato reale è COMPLETATO
   var officialWhatsappLink = null;
   if (cand.stato === 'COMPLETATO') {
-    var privateCfg = fsGetDocument_('configurazione', 'private') || {};
-    var candidateOfficial =
-      (privateCfg.linkWhatsappUfficiale && String(privateCfg.linkWhatsappUfficiale).trim()) ||
-      getOfficialWhatsappFallback_() ||
-      '';
-    officialWhatsappLink = sanitizeHttpsUrl_(candidateOfficial) || null;
+    officialWhatsappLink = getOfficialWhatsappLinkForCandidatura_(cand.id);
   }
 
   return jsonResponse_({
@@ -356,14 +372,11 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     return jsonResponse_({
       ok: false,
       code: 'INVALID_INPUT',
+      completed: false,
+      emailConfirmed: false,
+      linkWhatsappUfficiale: null,
       error: 'Parametri di verifica candidatura non validi.'
     });
-  }
-
-  var cache = CacheService.getScriptCache();
-  var doneKey = 'notify_pub_done_' + sha256Short_(candidaturaId);
-  if (cache.get(doneKey)) {
-    return jsonResponse_({ ok: true, status: 'ALREADY_PROCESSED' });
   }
 
   var failCodeKey = 'notify_pub_fail_' + sha256Short_(code);
@@ -374,15 +387,10 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     return jsonResponse_({
       ok: false,
       code: 'RATE_LIMITED',
+      completed: false,
+      emailConfirmed: false,
+      linkWhatsappUfficiale: null,
       error: 'Limite temporaneo di notifiche raggiunto. Il controllo periodico completerà l’invio automaticamente.'
-    });
-  }
-
-  if (!checkPerEmailNuovoLimit_(email)) {
-    return jsonResponse_({
-      ok: false,
-      code: 'RATE_LIMITED',
-      error: 'Troppi invii ravvicinati verso questo indirizzo email.'
     });
   }
 
@@ -393,7 +401,76 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     return jsonResponse_({
       ok: false,
       code: 'UNAUTHORIZED',
+      completed: false,
+      emailConfirmed: false,
+      linkWhatsappUfficiale: null,
       error: 'Richiesta di notifica non autorizzata.'
+    });
+  }
+
+  if (cand.archiviata === true) {
+    return jsonResponse_({
+      ok: false,
+      code: 'FORBIDDEN_STATE',
+      completed: false,
+      emailConfirmed: false,
+      stato: String(cand.stato || 'NUOVO'),
+      linkWhatsappUfficiale: null,
+      error: 'Candidatura archiviata.'
+    });
+  }
+
+  // Idempotenza sicura e recupero storico: se già COMPLETATO non reinvia email duplicate,
+  // ma verifica/recupera l'eventuale registrazione mancante in storico_operazioni.
+  if (cand.stato === 'COMPLETATO') {
+    var existingCompletion = autoCompleteCandidaturaIfEmailConfirmed_(candidaturaId);
+    if (!existingCompletion.historyRecorded) {
+      return jsonResponse_({
+        ok: false,
+        code: existingCompletion.reason || 'HISTORY_WRITE_FAILED',
+        status: existingCompletion.reason || 'HISTORY_WRITE_FAILED',
+        completed: false,
+        historyRecorded: false,
+        emailConfirmed: Boolean(existingCompletion.emailConfirmed),
+        stato: 'COMPLETATO',
+        linkWhatsappUfficiale: null,
+        stats: { processed: 0, sent: 0, skipped: 0, failed: 0 },
+        error:
+          existingCompletion.error ||
+          'Stato COMPLETATO presente ma registrazione obbligatoria nello storico non confermata.'
+      });
+    }
+
+    if (existingCompletion.manualCompleted) {
+      var manualOfficialLink = existingCompletion.emailConfirmed
+        ? getOfficialWhatsappLinkForCandidatura_(candidaturaId)
+        : null;
+      return jsonResponse_({
+        ok: true,
+        status: 'MANUAL_ADMIN_COMPLETED',
+        completed: Boolean(existingCompletion.emailConfirmed),
+        historyRecorded: true,
+        manualCompleted: true,
+        emailConfirmed: Boolean(existingCompletion.emailConfirmed),
+        stato: 'COMPLETATO',
+        linkWhatsappUfficiale: manualOfficialLink,
+        stats: { processed: 0, sent: 0, skipped: 0, failed: 0 }
+      });
+    }
+
+    var alreadyOfficialLink = existingCompletion.emailConfirmed
+      ? getOfficialWhatsappLinkForCandidatura_(candidaturaId)
+      : null;
+    return jsonResponse_({
+      ok: true,
+      status: existingCompletion.historyRecovered ? 'COMPLETED' : 'ALREADY_COMPLETED',
+      completed: Boolean(existingCompletion.completed && existingCompletion.historyRecorded),
+      historyRecorded: true,
+      historyRecovered: Boolean(existingCompletion.historyRecovered),
+      emailConfirmed: Boolean(existingCompletion.emailConfirmed),
+      stato: 'COMPLETATO',
+      linkWhatsappUfficiale: alreadyOfficialLink,
+      stats: { processed: 0, sent: 0, skipped: 0, failed: 0 }
     });
   }
 
@@ -401,6 +478,10 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     return jsonResponse_({
       ok: false,
       code: 'FORBIDDEN_STATE',
+      completed: false,
+      emailConfirmed: false,
+      stato: String(cand.stato || ''),
+      linkWhatsappUfficiale: null,
       error: 'Questo endpoint pubblico è consentito esclusivamente per nuove candidature.'
     });
   }
@@ -409,20 +490,92 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     var ageMinutes = (Date.now() - new Date(cand.createdAt).getTime()) / 60000;
     if (ageMinutes > FICUP_CONFIG.PUBLIC_NOTIFY_MAX_AGE_MINUTES) {
       return jsonResponse_({
-        ok: true,
-        status: 'DEFERRED_TO_TRIGGER'
+        ok: false,
+        code: 'DEFERRED_TO_TRIGGER',
+        status: 'DEFERRED_TO_TRIGGER',
+        completed: false,
+        emailConfirmed: false,
+        stato: String(cand.stato || 'NUOVO'),
+        linkWhatsappUfficiale: null,
+        error: 'Finestra di verifica immediata superata; il trigger periodico completerà la pratica.'
       });
     }
   }
 
+  var alreadyDispatched = areNuovoEmailsConfirmedSent_(candidaturaId);
+  if (!alreadyDispatched && !checkPerEmailNuovoLimit_(email)) {
+    return jsonResponse_({
+      ok: false,
+      code: 'RATE_LIMITED',
+      completed: false,
+      emailConfirmed: false,
+      stato: String(cand.stato || 'NUOVO'),
+      linkWhatsappUfficiale: null,
+      error: 'Troppi invii ravvicinati verso questo indirizzo email.'
+    });
+  }
+
   incrementCacheCounter_('notify_pub_global', FICUP_CONFIG.NOTIFY_WINDOW_SECONDS);
-  cache.put(doneKey, '1', FICUP_CONFIG.PUBLIC_NOTIFY_MAX_AGE_MINUTES * 60);
 
   var publicCfg = fsGetDocument_('configurazione', 'public') || {};
-  var stats = processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: true });
+  var stats = alreadyDispatched
+    ? { processed: 0, sent: 0, skipped: 2, failed: 0 }
+    : processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: true });
+
+  var confirmed = stats.failed === 0 && areNuovoEmailsConfirmedSent_(candidaturaId);
+  if (!confirmed) {
+    return jsonResponse_({
+      ok: true,
+      status: 'EMAIL_NOT_CONFIRMED',
+      completed: false,
+      emailConfirmed: false,
+      stato: 'NUOVO',
+      linkWhatsappUfficiale: null,
+      stats: stats,
+      error: 'Invio email non confermato dal server: stato candidatura mantenuto su NUOVO.'
+    });
+  }
+
+  var completion = autoCompleteCandidaturaIfEmailConfirmed_(candidaturaId);
+  if (completion.completed && completion.historyRecorded && completion.stato === 'COMPLETATO') {
+    var officialWhatsappLink = getOfficialWhatsappLinkForCandidatura_(candidaturaId);
+    return jsonResponse_({
+      ok: true,
+      status: completion.alreadyCompleted ? 'ALREADY_COMPLETED' : 'COMPLETED',
+      completed: true,
+      historyRecorded: true,
+      emailConfirmed: true,
+      stato: 'COMPLETATO',
+      linkWhatsappUfficiale: officialWhatsappLink,
+      stats: stats
+    });
+  }
+
+  if (completion.reason === 'HISTORY_WRITE_FAILED') {
+    return jsonResponse_({
+      ok: false,
+      code: 'HISTORY_WRITE_FAILED',
+      status: 'HISTORY_WRITE_FAILED',
+      completed: false,
+      historyRecorded: false,
+      emailConfirmed: true,
+      stato: 'COMPLETATO',
+      linkWhatsappUfficiale: null,
+      stats: stats,
+      error:
+        completion.error ||
+        'Stato aggiornato a COMPLETATO ma registrazione obbligatoria nello storico operazioni non riuscita.'
+    });
+  }
 
   return jsonResponse_({
     ok: true,
+    status: completion.reason || 'NOT_COMPLETED',
+    completed: false,
+    historyRecorded: Boolean(completion.historyRecorded),
+    emailConfirmed: true,
+    stato: completion.stato || String(cand.stato || 'NUOVO'),
+    linkWhatsappUfficiale: null,
     stats: stats
   });
 }
@@ -456,16 +609,51 @@ function syncCandidatureTrigger() {
   var maxUpdatedIso = lastSyncIso;
   var sentInRun = 0;
   var processedCount = 0;
+  var hasPendingHistoryFailure = false;
 
   for (var i = 0; i < docs.length; i++) {
     if (sentInRun >= FICUP_CONFIG.MAX_EMAILS_PER_TRIGGER_RUN) {
       break;
     }
     var cand = docs[i];
-    var stats = processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: false });
-    sentInRun += stats.sent || 0;
+    var candHealthy = true;
+    if (cand.archiviata !== true) {
+      if (
+        String(cand.stato || '') === 'COMPLETATO' &&
+        !fsGetDocument_('storico_operazioni', buildAutoCompletionHistoryId_(cand.id)) &&
+        !hasManualAdminHistory_(cand.id) &&
+        areNuovoEmailsConfirmedSent_(cand.id)
+      ) {
+        var recRes = autoCompleteCandidaturaIfEmailConfirmed_(cand.id);
+        if (!recRes.historyRecorded) {
+          candHealthy = false;
+          hasPendingHistoryFailure = true;
+        }
+      }
+
+      if (candHealthy) {
+        var stats = processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: false });
+        sentInRun += stats.sent || 0;
+        if (
+          String(cand.stato || '') === 'NUOVO' &&
+          (stats.failed || 0) === 0 &&
+          areNuovoEmailsConfirmedSent_(cand.id)
+        ) {
+          var compRes = autoCompleteCandidaturaIfEmailConfirmed_(cand.id);
+          if (compRes.reason === 'HISTORY_WRITE_FAILED') {
+            candHealthy = false;
+            hasPendingHistoryFailure = true;
+          }
+        }
+      }
+    }
     processedCount += 1;
-    if (cand.updatedAt && new Date(cand.updatedAt).getTime() > new Date(maxUpdatedIso).getTime()) {
+    if (
+      !hasPendingHistoryFailure &&
+      candHealthy &&
+      cand.updatedAt &&
+      new Date(cand.updatedAt).getTime() > new Date(maxUpdatedIso).getTime()
+    ) {
       maxUpdatedIso = cand.updatedAt;
     }
   }

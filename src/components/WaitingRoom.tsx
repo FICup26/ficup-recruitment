@@ -17,7 +17,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
-  Trash2,
   Trophy,
   XCircle,
 } from 'lucide-react';
@@ -36,7 +35,6 @@ interface WaitingRoomProps {
   config: Omit<ConfigurazionePublica, 'updatedAt' | 'updatedBy'>;
   waitingPass: WaitingRoomPass | null;
   onStartWizard: () => void;
-  onClearWaitingPass: () => void;
   onWaitingPassVerified?: (pass: WaitingRoomPass) => void;
 }
 
@@ -125,7 +123,7 @@ function buildRealTimelineStages(
         id: 'completed',
         title: 'Accesso community WhatsApp',
         description:
-          'Dopo verifica finale dello staff e autorizzazione attiva, si sblocca il pulsante per entrare nel Gruppo Ufficiale.',
+          'Al raggiungimento confermato dello stato COMPLETATO si sblocca il pulsante per entrare nel Gruppo Ufficiale.',
         status: 'locked',
       },
     ];
@@ -185,24 +183,24 @@ function buildRealTimelineStages(
     },
     {
       id: 'review',
-      title: 'In valutazione',
+      title: 'Verifica dati & email',
       description:
         stageLevel > 2
-          ? 'Valutazione preliminare completata positivamente dallo staff FICUP.'
+          ? 'Verifica preliminare e conferma invio email completate.'
           : realState === 'DA CONTATTARE'
             ? 'Lo staff ti contatterà o ti attende sul gruppo WhatsApp provvisorio per completare la verifica.'
-            : 'La richiesta è in coda di verifica presso lo staff FANTA ITALIA CUP.',
+            : 'La richiesta è in attesa di conferma invio email / verifica.',
       status: stageLevel > 2 ? 'completed' : 'active',
     },
     {
       id: 'approved',
-      title: 'Approvata',
+      title: 'Conferma idoneità',
       description:
         stageLevel === 3
-          ? 'Candidatura approvata! Lo staff sta preparando il tuo invito ufficiale su Fantaleghe.'
+          ? 'Candidatura approvata! Invito ufficiale in preparazione.'
           : stageLevel > 3
-            ? 'Candidatura approvata dallo staff.'
-            : 'In attesa di conferma di approvazione da parte dello staff.',
+            ? 'Requisiti confermati per la partecipazione FICUP.'
+            : 'Si completa automaticamente a verifica email confermata o su approvazione staff.',
       status: stageLevel > 3 ? 'completed' : stageLevel === 3 ? 'active' : 'locked',
     },
     {
@@ -214,8 +212,8 @@ function buildRealTimelineStages(
           : realState === 'DA COMPLETARE'
             ? 'Invito inviato: completa gli ultimi passaggi su Fantaleghe (rosa e nome club) e segnala al gruppo provvisorio.'
             : stageLevel > 4
-              ? 'Invito accettato e ingresso verificato su Fantaleghe.'
-              : 'Disponibile dopo l’approvazione della candidatura.',
+              ? 'Comunicazioni email ufficiali inviate e pratica pronta su Fantaleghe.'
+              : 'Disponibile al completamento della verifica.',
       status: stageLevel > 4 ? 'completed' : stageLevel === 4 ? 'active' : 'locked',
     },
     {
@@ -223,10 +221,10 @@ function buildRealTimelineStages(
       title: 'Accesso community WhatsApp',
       description:
         realState === 'COMPLETATO' && Boolean(serverStatus?.linkWhatsappUfficiale)
-          ? 'Verifica finale superata! Il pulsante verde per entrare nel Gruppo WhatsApp Ufficiale è sbloccato qui accanto.'
+          ? 'Stato COMPLETATO raggiunto! Il pulsante per entrare nel Gruppo WhatsApp Ufficiale è sbloccato qui accanto.'
           : realState === 'COMPLETATO'
-            ? 'Stato COMPLETATO raggiunto: in attesa di link ufficiale configurato dallo staff.'
-            : 'Si sblocca solo al raggiungimento dello stato COMPLETATO e con autorizzazione attiva dello staff.',
+            ? 'Stato COMPLETATO raggiunto: link WhatsApp ufficiale non ancora configurato o soggetto a verifica dedicata.'
+            : 'Si sblocca esclusivamente al raggiungimento confermato dello stato COMPLETATO.',
       status:
         realState === 'COMPLETATO' && Boolean(serverStatus?.linkWhatsappUfficiale)
           ? 'completed'
@@ -241,7 +239,6 @@ export function WaitingRoom({
   config,
   waitingPass,
   onStartWizard,
-  onClearWaitingPass,
   onWaitingPassVerified,
 }: WaitingRoomProps) {
   const [copiedCode, setCopiedCode] = useState(false);
@@ -310,14 +307,6 @@ export function WaitingRoom({
       return;
     }
     await runLookup(cleanCode, cleanEmail, true);
-  };
-
-  const handleResetPass = () => {
-    setServerStatus(null);
-    setLookupError(null);
-    setLookupCode('');
-    setLookupEmail('');
-    onClearWaitingPass();
   };
 
   const activeCode = serverStatus?.codiceCandidatura ?? waitingPass?.codiceCandidatura ?? '';
@@ -651,26 +640,15 @@ export function WaitingRoom({
                         {formatIsoDate(activeCreatedIso)}
                       </p>
                     </div>
-                    <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs text-slate-500">Stato Firestore</p>
-                        <p className="font-mono-tabular text-xs font-bold text-[#0B1F4D] mt-0.5">
-                          {serverStatus
-                            ? serverStatus.stato
-                            : isAppsScriptConfigured
-                              ? 'In sincronizzazione...'
-                              : 'Pass locale'}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleResetPass}
-                        title="Rimuovi tessera da questo dispositivo"
-                        className="min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-600 hover:text-[#0B1F4D] hover:bg-slate-50 inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Esci</span>
-                      </button>
+                    <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5">
+                      <p className="text-xs text-slate-500">Stato Firestore</p>
+                      <p className="font-mono-tabular text-xs font-bold text-[#0B1F4D] mt-0.5">
+                        {serverStatus
+                          ? serverStatus.stato
+                          : isAppsScriptConfigured
+                            ? 'In sincronizzazione...'
+                            : 'Pass locale'}
+                      </p>
                     </div>
                   </div>
 
@@ -871,8 +849,8 @@ export function WaitingRoom({
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
                   {canAccessOfficialWa
-                    ? 'Candidatura completata e autorizzata dallo staff! Ora puoi accedere direttamente al Gruppo WhatsApp Ufficiale della community FICUP.'
-                    : 'Il pulsante ufficiale si attiva solo dopo l’approvazione della candidatura, l’ingresso su Fantaleghe (stato COMPLETATO) e l’autorizzazione attiva dello staff.'}
+                    ? 'Candidatura in stato COMPLETATO! Ora puoi accedere direttamente al Gruppo WhatsApp Ufficiale della community FICUP.'
+                    : 'Il pulsante ufficiale si sblocca esclusivamente quando la candidatura risulta in stato COMPLETATO con accesso ufficiale abilitato dal backend.'}
                 </p>
 
                 {canAccessOfficialWa && serverStatus?.linkWhatsappUfficiale ? (

@@ -20,7 +20,6 @@ import {
   type ConfigurazionePublica,
 } from './lib/firestore';
 import {
-  clearWaitingRoomPass,
   loadWaitingRoomPass,
   saveWaitingRoomPass,
   type WaitingRoomPass,
@@ -125,11 +124,6 @@ function FicupPortal() {
     setWaitingPass(pass);
   };
 
-  const handleClearWaitingPass = () => {
-    clearWaitingRoomPass();
-    setWaitingPass(null);
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-white text-[#0B1F4D]">
       <Header
@@ -164,7 +158,6 @@ function FicupPortal() {
             config={publicConfig}
             waitingPass={waitingPass}
             onStartWizard={() => handleNavigate('wizard')}
-            onClearWaitingPass={handleClearWaitingPass}
             onWaitingPassVerified={handleCandidaturaSubmitted}
           />
         )}

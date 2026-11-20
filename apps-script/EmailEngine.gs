@@ -41,8 +41,410 @@ function recordPerEmailNuovoSend_(email) {
   cache.put(key, String(count + 1), 3600);
 }
 
+function buildAutoCompletionHistoryId_(candidaturaId) {
+  var candidate = String(candidaturaId || '') + '__AUTO_COMPLETATO';
+  if (FICUP_CONFIG.DOC_ID_REGEX.test(candidate)) {
+    return candidate;
+  }
+  return 'sys_ac_' + sha256Short_(candidaturaId);
+}
+
+function createAutoCompletionHistoryDoc_(cand, nowDate) {
+  var historyId = buildAutoCompletionHistoryId_(cand.id);
+  return fsCreateDocumentIfAbsent_('storico_operazioni', historyId, {
+    candidaturaId: cand.id,
+    codiceCandidatura: cand.codiceCandidatura || '',
+    statoPrecedente: 'NUOVO',
+    statoNuovo: 'COMPLETATO',
+    notaOperazione: 'Completamento automatico backend Apps Script dopo verifica invio email positivo.',
+    adminUid: 'SYSTEM_APPS_SCRIPT',
+    adminEmail: FICUP_CONFIG.OPERATIONAL_EMAIL,
+    createdAt: nowDate || new Date()
+  });
+}
+
+function ensureAutoCompletionHistoryForCompleted_(cand, emailConfirmed) {
+  var deterministicId = buildAutoCompletionHistoryId_(cand.id);
+  var existingDeterministic = fsGetDocument_('storico_operazioni', deterministicId);
+  if (existingDeterministic) {
+    return {
+      ok: true,
+      created: false,
+      alreadyPresent: true,
+      manualCompleted: false,
+      historyId: deterministicId
+    };
+  }
+
+  var historyDocs = fsRunQuery_({
+    from: [{ collectionId: 'storico_operazioni' }],
+    where: {
+      fieldFilter: {
+        field: { fieldPath: 'candidaturaId' },
+        op: 'EQUAL',
+        value: { stringValue: cand.id }
+      }
+    },
+    limit: 30
+  });
+
+  var hasSystemCompletato = false;
+  var hasManualEntry = false;
+  if (historyDocs && historyDocs.length > 0) {
+    for (var i = 0; i < historyDocs.length; i++) {
+      var entry = historyDocs[i];
+      if (
+        String(entry.adminUid || '') === 'SYSTEM_APPS_SCRIPT' &&
+        String(entry.statoNuovo || '') === 'COMPLETATO'
+      ) {
+        hasSystemCompletato = true;
+      } else if (String(entry.adminUid || '') !== 'SYSTEM_APPS_SCRIPT') {
+        hasManualEntry = true;
+      }
+    }
+  }
+
+  if (hasSystemCompletato) {
+    return {
+      ok: true,
+      created: false,
+      alreadyPresent: true,
+      manualCompleted: false,
+      historyId: null
+    };
+  }
+
+  if (hasManualEntry) {
+    return {
+      ok: true,
+      created: false,
+      alreadyPresent: true,
+      manualCompleted: true,
+      historyId: null
+    };
+  }
+
+  if (!emailConfirmed) {
+    return {
+      ok: false,
+      created: false,
+      alreadyPresent: false,
+      manualCompleted: false,
+      reason: 'EMAIL_NOT_CONFIRMED',
+      error: 'Email di conferma non risultano inviate: impossibile creare storico automatico.'
+    };
+  }
+
+  try {
+    var created = createAutoCompletionHistoryDoc_(cand, new Date());
+    return {
+      ok: true,
+      created: created,
+      alreadyPresent: !created,
+      manualCompleted: false,
+      historyId: deterministicId
+    };
+  } catch (historyErr) {
+    var errMsg = historyErr && historyErr.message ? historyErr.message : String(historyErr);
+    console.error('Errore recupero storico auto-completamento ' + cand.id + ':', historyErr);
+    return {
+      ok: false,
+      created: false,
+      alreadyPresent: false,
+      manualCompleted: false,
+      reason: 'HISTORY_WRITE_FAILED',
+      error: errMsg
+    };
+  }
+}
+
+function isSystemAutoCompletedOnly_(candidaturaId) {
+  var historyDocs = fsRunQuery_({
+    from: [{ collectionId: 'storico_operazioni' }],
+    where: {
+      fieldFilter: {
+        field: { fieldPath: 'candidaturaId' },
+        op: 'EQUAL',
+        value: { stringValue: candidaturaId }
+      }
+    },
+    limit: 30
+  });
+
+  if (!historyDocs || historyDocs.length === 0) {
+    return false;
+  }
+
+  var hasSystemCompletato = false;
+  var hasManualStateTransition = false;
+  for (var i = 0; i < historyDocs.length; i++) {
+    var entry = historyDocs[i];
+    if (String(entry.adminUid || '') === 'SYSTEM_APPS_SCRIPT' && String(entry.statoNuovo || '') === 'COMPLETATO') {
+      hasSystemCompletato = true;
+    } else if (
+      String(entry.adminUid || '') !== 'SYSTEM_APPS_SCRIPT' &&
+      String(entry.statoPrecedente || '') !== String(entry.statoNuovo || '')
+    ) {
+      hasManualStateTransition = true;
+    }
+  }
+  return hasSystemCompletato && !hasManualStateTransition;
+}
+
+function hasManualAdminHistory_(candidaturaId) {
+  var historyDocs = fsRunQuery_({
+    from: [{ collectionId: 'storico_operazioni' }],
+    where: {
+      fieldFilter: {
+        field: { fieldPath: 'candidaturaId' },
+        op: 'EQUAL',
+        value: { stringValue: candidaturaId }
+      }
+    },
+    limit: 30
+  });
+
+  if (!historyDocs || historyDocs.length === 0) {
+    return false;
+  }
+
+  for (var i = 0; i < historyDocs.length; i++) {
+    if (String(historyDocs[i].adminUid || '') !== 'SYSTEM_APPS_SCRIPT') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function areNuovoEmailsConfirmedSent_(candidaturaId) {
+  var candLog = fsGetDocument_('email_logs', buildEmailLogId_(candidaturaId, 'NUOVO_CANDIDATO'));
+  var adminLog = fsGetDocument_('email_logs', buildEmailLogId_(candidaturaId, 'NUOVO_ADMIN'));
+  return Boolean(
+    candLog &&
+      candLog.status === 'SENT' &&
+      adminLog &&
+      adminLog.status === 'SENT'
+  );
+}
+
+/**
+ * Aggiorna la candidatura a COMPLETATO SOLO dopo conferma reale dell'invio email
+ * (NUOVO_CANDIDATO e NUOVO_ADMIN entrambi SENT su email_logs),
+ * garantendo la registrazione deterministica e recuperabile in storico_operazioni
+ * senza mai sovrascrivere eventuali modifiche manuali dello staff.
+ */
+function autoCompleteCandidaturaIfEmailConfirmed_(candidaturaId) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return {
+      completed: false,
+      alreadyCompleted: false,
+      manualCompleted: false,
+      historyRecorded: false,
+      emailConfirmed: false,
+      stato: null,
+      reason: 'LOCK_TIMEOUT'
+    };
+  }
+
+  try {
+    var cand = fsGetDocument_('candidature', candidaturaId);
+    if (!cand) {
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: false,
+        stato: null,
+        reason: 'NOT_FOUND'
+      };
+    }
+
+    if (cand.archiviata === true) {
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: false,
+        stato: String(cand.stato || 'NUOVO'),
+        reason: 'ARCHIVED'
+      };
+    }
+
+    var emailConfirmed = areNuovoEmailsConfirmedSent_(candidaturaId);
+
+    if (cand.stato === 'COMPLETATO') {
+      var histCheck = ensureAutoCompletionHistoryForCompleted_(cand, emailConfirmed);
+      if (!histCheck.ok) {
+        return {
+          completed: false,
+          alreadyCompleted: false,
+          manualCompleted: false,
+          historyRecorded: false,
+          emailConfirmed: emailConfirmed,
+          stato: 'COMPLETATO',
+          reason: histCheck.reason || 'HISTORY_WRITE_FAILED',
+          error: histCheck.error || 'Registrazione storico auto-completamento non riuscita.'
+        };
+      }
+      if (histCheck.manualCompleted) {
+        return {
+          completed: false,
+          alreadyCompleted: true,
+          manualCompleted: true,
+          historyRecorded: true,
+          emailConfirmed: emailConfirmed,
+          stato: 'COMPLETATO',
+          reason: 'MANUAL_ADMIN_COMPLETED'
+        };
+      }
+      return {
+        completed: true,
+        alreadyCompleted: histCheck.alreadyPresent,
+        manualCompleted: false,
+        historyRecorded: true,
+        historyRecovered: histCheck.created,
+        emailConfirmed: emailConfirmed,
+        stato: 'COMPLETATO',
+        reason: histCheck.created ? 'HISTORY_RECOVERED' : 'ALREADY_COMPLETED'
+      };
+    }
+
+    if (cand.stato !== 'NUOVO') {
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: emailConfirmed,
+        stato: String(cand.stato || 'NUOVO'),
+        reason: 'FORBIDDEN_STATE'
+      };
+    }
+
+    if (hasManualAdminHistory_(candidaturaId)) {
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: emailConfirmed,
+        stato: String(cand.stato || 'NUOVO'),
+        reason: 'MANUAL_ADMIN_HISTORY'
+      };
+    }
+
+    if (!emailConfirmed) {
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: false,
+        stato: String(cand.stato || 'NUOVO'),
+        reason: 'EMAIL_NOT_CONFIRMED'
+      };
+    }
+
+    var now = new Date();
+    var patchRes = fsPatchDocumentIfUnmodified_(
+      'candidature',
+      candidaturaId,
+      {
+        stato: 'COMPLETATO',
+        updatedAt: now
+      },
+      cand._updateTime
+    );
+
+    if (!patchRes.updated) {
+      var latest = fsGetDocument_('candidature', candidaturaId);
+      if (latest && latest.stato === 'COMPLETATO' && latest.archiviata !== true) {
+        var latestConfirmed = areNuovoEmailsConfirmedSent_(candidaturaId);
+        var concHist = ensureAutoCompletionHistoryForCompleted_(latest, latestConfirmed);
+        if (!concHist.ok) {
+          return {
+            completed: false,
+            alreadyCompleted: false,
+            manualCompleted: false,
+            historyRecorded: false,
+            emailConfirmed: latestConfirmed,
+            stato: 'COMPLETATO',
+            reason: concHist.reason || 'HISTORY_WRITE_FAILED',
+            error: concHist.error || 'Registrazione storico auto-completamento non riuscita.'
+          };
+        }
+        if (concHist.manualCompleted) {
+          return {
+            completed: false,
+            alreadyCompleted: true,
+            manualCompleted: true,
+            historyRecorded: true,
+            emailConfirmed: latestConfirmed,
+            stato: 'COMPLETATO',
+            reason: 'MANUAL_ADMIN_COMPLETED'
+          };
+        }
+        return {
+          completed: true,
+          alreadyCompleted: concHist.alreadyPresent,
+          manualCompleted: false,
+          historyRecorded: true,
+          emailConfirmed: latestConfirmed,
+          stato: 'COMPLETATO',
+          reason: concHist.alreadyPresent ? 'ALREADY_COMPLETED' : 'COMPLETED'
+        };
+      }
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: true,
+        stato: latest ? String(latest.stato || 'NUOVO') : String(cand.stato || 'NUOVO'),
+        reason: 'CONCURRENT_MODIFICATION'
+      };
+    }
+
+    try {
+      createAutoCompletionHistoryDoc_(cand, now);
+    } catch (historyErr) {
+      var histErrMsg = historyErr && historyErr.message ? historyErr.message : String(historyErr);
+      console.error('Errore scrittura storico auto-completamento ' + candidaturaId + ':', historyErr);
+      return {
+        completed: false,
+        alreadyCompleted: false,
+        manualCompleted: false,
+        historyRecorded: false,
+        emailConfirmed: true,
+        stato: 'COMPLETATO',
+        reason: 'HISTORY_WRITE_FAILED',
+        error: histErrMsg
+      };
+    }
+
+    return {
+      completed: true,
+      alreadyCompleted: false,
+      manualCompleted: false,
+      historyRecorded: true,
+      emailConfirmed: true,
+      stato: 'COMPLETATO',
+      reason: 'COMPLETED'
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function processCandidaturaNotifications_(candidatura, publicConfig, options) {
   if (!candidatura || !candidatura.id || !candidatura.emailFantaleghe) {
+    return { processed: 0, sent: 0, skipped: 0, failed: 0 };
+  }
+
+  if (candidatura.archiviata === true) {
     return { processed: 0, sent: 0, skipped: 0, failed: 0 };
   }
 
@@ -50,6 +452,15 @@ function processCandidaturaNotifications_(candidatura, publicConfig, options) {
   var events = getEventTypesForCandidatura_(candidatura);
   if (events.length === 0) {
     return { processed: 0, sent: 0, skipped: 0, failed: 0 };
+  }
+
+  // Evita l'invio ridondante di STATO_COMPLETATO dal trigger periodico se la candidatura
+  // è stata completata automaticamente al momento della ricezione senza passaggio manuale staff.
+  if (
+    String(candidatura.stato || '') === 'COMPLETATO' &&
+    isSystemAutoCompletedOnly_(candidatura.id)
+  ) {
+    return { processed: 0, sent: 0, skipped: events.length, failed: 0 };
   }
 
   var config = publicConfig || fsGetDocument_('configurazione', 'public') || {};
@@ -303,9 +714,15 @@ function retryPendingEmailLogs_(maxSends) {
       });
       continue;
     }
+    if (cand.archiviata === true) {
+      continue;
+    }
     var outcome = dispatchSingleIdempotentEmail_(cand, log.eventType, config, { isPublicTrigger: false });
     if (outcome === 'SENT') {
       retried += 1;
+      if (cand.stato === 'NUOVO') {
+        autoCompleteCandidaturaIfEmailConfirmed_(cand.id);
+      }
     }
   }
 

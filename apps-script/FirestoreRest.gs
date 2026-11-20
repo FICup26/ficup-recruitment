@@ -170,6 +170,22 @@ function fsCreateDocumentIfAbsent_(collectionName, docId, plainObj) {
   return true;
 }
 
+function fsCreateAutoDocument_(collectionName, plainObj) {
+  var url =
+    getFirestoreBaseUrl_() +
+    '/' +
+    encodeURIComponent(collectionName);
+
+  var res = firestoreRequest_(url, 'post', {
+    fields: toFirestoreFields_(plainObj)
+  });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error('Firestore AUTO CREATE ' + collectionName + ' HTTP ' + res.status + ': ' + res.raw);
+  }
+  return res.data ? fromFirestoreDoc_(res.data) : null;
+}
+
 function fsPatchDocument_(collectionName, docId, partialObj) {
   var keys = Object.keys(partialObj);
   var maskParams = keys
@@ -195,6 +211,56 @@ function fsPatchDocument_(collectionName, docId, partialObj) {
     throw new Error('Firestore PATCH ' + collectionName + '/' + docId + ' HTTP ' + res.status + ': ' + res.raw);
   }
   return res.data ? fromFirestoreDoc_(res.data) : null;
+}
+
+/**
+ * Aggiorna il documento con controllo ottimistico sulla versione (currentDocument.updateTime)
+ * per evitare di sovrascrivere modifiche manuali effettuate contemporaneamente da un admin.
+ */
+function fsPatchDocumentIfUnmodified_(collectionName, docId, partialObj, expectedUpdateTime) {
+  var keys = Object.keys(partialObj);
+  var params = keys.map(function (k) {
+    return 'updateMask.fieldPaths=' + encodeURIComponent(k);
+  });
+
+  if (expectedUpdateTime) {
+    params.push('currentDocument.updateTime=' + encodeURIComponent(String(expectedUpdateTime)));
+  } else {
+    params.push('currentDocument.exists=true');
+  }
+
+  var url =
+    getFirestoreBaseUrl_() +
+    '/' +
+    encodeURIComponent(collectionName) +
+    '/' +
+    encodeURIComponent(docId) +
+    '?' +
+    params.join('&');
+
+  var res = firestoreRequest_(url, 'patch', {
+    fields: toFirestoreFields_(partialObj)
+  });
+
+  if (res.status === 400 || res.status === 404 || res.status === 409 || res.status === 412) {
+    return {
+      updated: false,
+      conflict: true,
+      status: res.status,
+      raw: res.raw,
+      doc: null
+    };
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error('Firestore CONDITIONAL PATCH ' + collectionName + '/' + docId + ' HTTP ' + res.status + ': ' + res.raw);
+  }
+  return {
+    updated: true,
+    conflict: false,
+    status: res.status,
+    raw: res.raw,
+    doc: res.data ? fromFirestoreDoc_(res.data) : null
+  };
 }
 
 function fsRunQuery_(structuredQuery) {
@@ -293,7 +359,7 @@ function fromFirestoreValue_(typed) {
 function fromFirestoreDoc_(doc) {
   var nameParts = (doc.name || '').split('/');
   var id = nameParts.length > 0 ? nameParts[nameParts.length - 1] : '';
-  var out = { id: id };
+  var out = { id: id, _updateTime: doc.updateTime || '' };
   var fields = doc.fields || {};
   var keys = Object.keys(fields);
   for (var i = 0; i < keys.length; i++) {

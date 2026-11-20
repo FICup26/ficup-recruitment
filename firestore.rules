@@ -115,6 +115,10 @@ service cloud.firestore {
         data.versioneInformativa is string &&
         data.versioneInformativa.size() >= 1 &&
         data.versioneInformativa.size() <= 32 &&
+        (!('archiviata' in data) || data.archiviata is bool) &&
+        (!('archiviataAt' in data) || data.archiviataAt == null || data.archiviataAt is timestamp) &&
+        (!('archiviataByUid' in data) || (data.archiviataByUid is string && data.archiviataByUid.size() <= 128)) &&
+        (!('archiviataByEmail' in data) || (data.archiviataByEmail is string && data.archiviataByEmail.size() <= 160)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -177,6 +181,10 @@ service cloud.firestore {
           'noteInterne',
           'consensoPrivacy',
           'versioneInformativa',
+          'archiviata',
+          'archiviataAt',
+          'archiviataByUid',
+          'archiviataByEmail',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -534,7 +542,37 @@ service cloud.firestore {
             'stato',
             'noteInterne',
             'updatedAt'
-          ])
+          ]) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'archiviata',
+              'archiviataAt',
+              'archiviataByUid',
+              'archiviataByEmail',
+              'updatedAt'
+            ]) &&
+            incoming().stato == existing().stato &&
+            incoming().archiviata == true &&
+            (!('archiviata' in existing()) || existing().archiviata == false) &&
+            incoming().archiviataAt == request.time &&
+            incoming().archiviataByUid == request.auth.uid &&
+            incoming().archiviataByEmail == request.auth.token.email
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'archiviata',
+              'archiviataAt',
+              'archiviataByUid',
+              'archiviataByEmail',
+              'updatedAt'
+            ]) &&
+            incoming().stato == existing().stato &&
+            incoming().archiviata == false &&
+            ('archiviata' in existing() && existing().archiviata == true) &&
+            incoming().archiviataAt == null &&
+            incoming().archiviataByUid == '' &&
+            incoming().archiviataByEmail == ''
+          )
         );
 
       allow delete: if false;

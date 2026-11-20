@@ -1,6 +1,7 @@
 import { ArrowRight, Home, Shield, UserCheck, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { FicupLogo } from './FicupLogo';
 
 export type AppView = 'home' | 'wizard' | 'waiting-room' | 'admin';
@@ -81,6 +82,7 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedNavId, setSelectedNavId] = useState<string>('home');
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
   const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -103,19 +105,26 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
     if (!menuOpen) {
       return;
     }
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setMenuOpen(false);
       }
     };
     const onPointerDown = (e: PointerEvent) => {
-      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const clickedTrigger = menuContainerRef.current?.contains(target) ?? false;
+      const clickedDrawer = drawerRef.current?.contains(target) ?? false;
+      if (!clickedTrigger && !clickedDrawer) {
         setMenuOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
     return () => {
+      document.body.style.overflow = previousBodyOverflow;
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
     };
@@ -131,8 +140,144 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
     onNavigate(view, sectionId);
   };
 
+  const portalDrawer =
+    typeof document !== 'undefined'
+      ? createPortal(
+          <AnimatePresence>
+            {menuOpen && (
+              <>
+                {/* Backdrop Overlay */}
+                <motion.div
+                  aria-hidden="true"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-[9998]"
+                  onClick={() => setMenuOpen(false)}
+                />
+
+                {/* Edge-Anchored Side Drawer Panel (50% viewport width, 100% viewport height) */}
+                <motion.nav
+                  ref={drawerRef}
+                  aria-label="Menu principale di navigazione"
+                  initial={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
+                  animate={prefersReducedMotion ? { opacity: 1 } : { x: 0 }}
+                  exit={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
+                  transition={{
+                    duration: prefersReducedMotion ? 0.05 : 0.35,
+                    ease: [0.16, 1, 0.3, 1],
+                  }}
+                  className="fixed top-0 right-0 bottom-0 z-[9999] w-[50vw] h-[100dvh] rounded-none bg-[#071436] text-white border-l border-[#D4AF37]/35 shadow-2xl flex flex-col overflow-y-auto overscroll-contain pl-3.5 sm:pl-8 pr-[max(0.875rem,env(safe-area-inset-right))] sm:pr-[max(2rem,env(safe-area-inset-right))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:pt-[max(2rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-[max(2rem,env(safe-area-inset-bottom))]"
+                >
+                  <div className="flex items-center justify-between gap-2 border-b border-white/15 pb-4 mb-5 sm:mb-6">
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                      <FicupLogo size="sm" className="hidden sm:block bg-white p-1 rounded-xl shrink-0" />
+                      <span className="font-display text-xs sm:text-lg font-black tracking-tight text-white leading-tight break-words">
+                        FANTA ITALIA CUP
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMenuOpen(false)}
+                      aria-label="Chiudi menu"
+                      className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4 sm:w-5 sm:h-5 text-[#D4AF37]" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 flex-1">
+                    {WEB_NAV_ITEMS.map((item) => {
+                      const isSelected =
+                        selectedNavId === item.id && (item.id !== 'home' || activeView === 'home');
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleLink(item.view, item.sectionId, item.id)}
+                          className={`group w-full text-left px-2.5 sm:px-4 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-between gap-2 sm:gap-3 cursor-pointer ${
+                            isSelected
+                              ? 'bg-white/15 text-[#FDE68A] border border-[#D4AF37]/50 shadow-sm'
+                              : 'border border-transparent text-slate-200 hover:bg-white/[0.08] hover:text-white'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 sm:gap-3.5 min-w-0">
+                            <span
+                              className={`font-mono-tabular text-[11px] sm:text-xs font-bold shrink-0 ${
+                                isSelected ? 'text-[#FDE68A]' : 'text-[#D4AF37]'
+                              }`}
+                            >
+                              {item.num}
+                            </span>
+                            <span className="font-display text-xs sm:text-base font-bold tracking-wide leading-snug break-words">
+                              {item.label}
+                            </span>
+                          </span>
+                          <ArrowRight
+                            className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 transition-transform duration-200 group-hover:translate-x-1 ${
+                              isSelected ? 'text-[#FDE68A]' : 'text-slate-400'
+                            }`}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Portal Access Shortcuts & CTA at bottom */}
+                  <div className="mt-5 sm:mt-6 pt-5 sm:pt-6 border-t border-white/15 space-y-2.5 sm:space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleLink('waiting-room', undefined, 'waiting-room')}
+                        className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
+                          activeView === 'waiting-room'
+                            ? 'bg-sky-500/25 border-sky-400/60 text-white'
+                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
+                        }`}
+                      >
+                        <UserCheck className="w-4 h-4 text-sky-300 shrink-0" />
+                        <span className="text-xs sm:text-sm font-bold leading-snug break-words">
+                          {hasWaitingPass ? 'Area Personale · Pass' : 'Area Personale'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleLink('admin', undefined, 'admin')}
+                        className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
+                          activeView === 'admin'
+                            ? 'bg-[#D4AF37]/25 border-[#D4AF37]/60 text-white'
+                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
+                        }`}
+                      >
+                        <Shield className="w-4 h-4 text-[#D4AF37] shrink-0" />
+                        <span className="text-xs sm:text-sm font-bold leading-snug break-words">
+                          Area Staff
+                        </span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleLink('wizard', undefined, 'wizard')}
+                      className="w-full py-3 sm:py-3.5 px-3 sm:px-4 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                    >
+                      <span>ENTRA IN CAMPO ORA</span>
+                      <ArrowRight className="w-4 h-4 shrink-0" />
+                    </button>
+                  </div>
+                </motion.nav>
+              </>
+            )}
+          </AnimatePresence>,
+          document.body
+        )
+      : null;
+
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/95 backdrop-blur-md">
+    <>
+      <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/95 backdrop-blur-md">
       <div className="relative max-w-7xl mx-auto px-3.5 sm:px-6 h-16 sm:h-[74px] flex items-center justify-between gap-2 sm:gap-5">
         {/* Left: Always-Clickable FICUP Home Logo */}
         <button
@@ -191,132 +336,6 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
               </span>
             )}
           </button>
-
-          {/* Compact Animated Floating Navigation Panel Anchored Near Burger Icon */}
-          <AnimatePresence>
-            {menuOpen && (
-              <>
-                {/* Backdrop Overlay */}
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-40"
-                  onClick={() => setMenuOpen(false)}
-                />
-
-                {/* Side Drawer Panel (50% width on desktop / full height) */}
-                <motion.nav
-                  aria-label="Menu principale di navigazione"
-                  initial={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
-                  animate={{ x: 0 }}
-                  exit={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
-                  transition={{
-                    duration: prefersReducedMotion ? 0.05 : 0.35,
-                    ease: [0.16, 1, 0.3, 1],
-                  }}
-                  className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-[50vw] max-w-[560px] h-full bg-[#071436] text-white border-l border-[#D4AF37]/35 shadow-2xl flex flex-col overflow-y-auto p-6 sm:p-8"
-                >
-                  <div className="flex items-center justify-between border-b border-white/15 pb-4 mb-6">
-                    <div className="flex items-center gap-3">
-                      <FicupLogo size="sm" className="bg-white p-1 rounded-xl" />
-                      <span className="font-display text-base sm:text-lg font-black tracking-tight text-white">
-                        FANTA ITALIA CUP
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setMenuOpen(false)}
-                      aria-label="Chiudi menu"
-                      className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-                    >
-                      <X className="w-5 h-5 text-[#D4AF37]" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-1.5 flex-1">
-                    {WEB_NAV_ITEMS.map((item) => {
-                      const isSelected =
-                        selectedNavId === item.id && (item.id !== 'home' || activeView === 'home');
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => handleLink(item.view, item.sectionId, item.id)}
-                          className={`group w-full text-left px-4 py-3 rounded-xl transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            isSelected
-                              ? 'bg-white/15 text-[#FDE68A] border border-[#D4AF37]/50 shadow-sm'
-                              : 'border border-transparent text-slate-200 hover:bg-white/[0.08] hover:text-white'
-                          }`}
-                        >
-                          <span className="flex items-center gap-3.5 min-w-0">
-                            <span
-                              className={`font-mono-tabular text-xs font-bold shrink-0 ${
-                                isSelected ? 'text-[#FDE68A]' : 'text-[#D4AF37]'
-                              }`}
-                            >
-                              {item.num}
-                            </span>
-                            <span className="font-display text-sm sm:text-base font-bold tracking-wide truncate">
-                              {item.label}
-                            </span>
-                          </span>
-                          <ArrowRight
-                            className={`w-4 h-4 shrink-0 transition-transform duration-200 group-hover:translate-x-1 ${
-                              isSelected ? 'text-[#FDE68A]' : 'text-slate-400'
-                            }`}
-                          />
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Portal Access Shortcuts & CTA at bottom */}
-                  <div className="mt-6 pt-6 border-t border-white/15 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleLink('waiting-room', undefined, 'waiting-room')}
-                        className={`px-4 py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
-                          activeView === 'waiting-room'
-                            ? 'bg-sky-500/25 border-sky-400/60 text-white'
-                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
-                        }`}
-                      >
-                        <UserCheck className="w-4 h-4 text-sky-300 shrink-0" />
-                        <span className="text-xs sm:text-sm font-bold truncate">
-                          {hasWaitingPass ? 'Area Personale · Pass' : 'Area Personale'}
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleLink('admin', undefined, 'admin')}
-                        className={`px-4 py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
-                          activeView === 'admin'
-                            ? 'bg-[#D4AF37]/25 border-[#D4AF37]/60 text-white'
-                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
-                        }`}
-                      >
-                        <Shield className="w-4 h-4 text-[#D4AF37] shrink-0" />
-                        <span className="text-xs sm:text-sm font-bold truncate">Area Staff</span>
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleLink('wizard', undefined, 'wizard')}
-                      className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-sm font-black tracking-wide hover:brightness-105 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                    >
-                      <span>ENTRA IN CAMPO ORA</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </motion.nav>
-              </>
-            )}
-          </AnimatePresence>
         </div>
       </div>
 
@@ -345,5 +364,7 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
         </div>
       )}
     </header>
+    {portalDrawer}
+    </>
   );
 }

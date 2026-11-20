@@ -2,6 +2,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 import {
   Activity,
   AlertCircle,
+  Archive,
   Check,
   CheckCircle2,
   Copy,
@@ -10,12 +11,15 @@ import {
   LogOut,
   MessageCircle,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Shield,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
@@ -31,12 +35,14 @@ import {
   type FirebaseEnvironmentDiagnostics,
 } from '../lib/firebase';
 import {
+  archiveCandidaturaByAdmin,
   DEFAULT_PUBLIC_CONFIG,
   fetchAmministratori,
   fetchWhatsappAutorizzazioniMap,
   getAdminConfig,
   isEffectiveWaAuthorized,
   resolveSimplifiedCandidaturaStato,
+  restoreCandidaturaByAdmin,
   saveAdminConfig,
   subscribeCandidature,
   verifyAdminAuthorization,
@@ -61,6 +67,7 @@ interface AdminPanelProps {
 
 type AdminTab =
   | 'candidature'
+  | 'archiviate'
   | 'documenti'
   | 'zonavar'
   | 'whatsapp'
@@ -122,9 +129,17 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const [candLoading, setCandLoading] = useState(false);
   const [candError, setCandError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [archivedSearchTerm, setArchivedSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState<CandidaturaFilter>('TUTTE');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [waAuthMap, setWaAuthMap] = useState<Record<string, WhatsappAutorizzazioneRecord>>({});
+  const [archiveTarget, setArchiveTarget] = useState<CandidaturaRecord | null>(null);
+  const [archiveSubmitting, setArchiveSubmitting] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [archiveFeedback, setArchiveFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   // Admins list state
   const [adminsList, setAdminsList] = useState<AmministratoreRecord[]>([]);
@@ -406,14 +421,83 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
     }
   };
 
+  const handleConfirmArchive = async () => {
+    if (!archiveTarget || !user || archiveSubmitting) {
+      return;
+    }
+    const target = archiveTarget;
+    setArchiveSubmitting(true);
+    setArchiveFeedback(null);
+    try {
+      await archiveCandidaturaByAdmin({
+        candidaturaId: target.id,
+        codiceCandidatura: target.codiceCandidatura,
+        statoCorrente: target.stato,
+        adminUser: user,
+      });
+      setArchiveTarget(null);
+      if (selectedId === target.id) {
+        setSelectedId(null);
+      }
+      setArchiveFeedback({
+        type: 'success',
+        message: `Candidatura ${target.codiceCandidatura} (${target.nome} ${target.cognome}) archiviata con successo. Non è più visibile nell'elenco principale ma resta recuperabile nella sezione Archiviate.`,
+      });
+    } catch (err) {
+      setArchiveFeedback({
+        type: 'error',
+        message: parseFirestoreUiError(err),
+      });
+    } finally {
+      setArchiveSubmitting(false);
+    }
+  };
+
+  const handleRestoreCandidatura = async (item: CandidaturaRecord) => {
+    if (!user || restoringId) {
+      return;
+    }
+    setRestoringId(item.id);
+    setArchiveFeedback(null);
+    try {
+      await restoreCandidaturaByAdmin({
+        candidaturaId: item.id,
+        codiceCandidatura: item.codiceCandidatura,
+        statoCorrente: item.stato,
+        adminUser: user,
+      });
+      setArchiveFeedback({
+        type: 'success',
+        message: `Candidatura ${item.codiceCandidatura} (${item.nome} ${item.cognome}) ripristinata nell'elenco principale con lo stato originale ${item.stato}.`,
+      });
+    } catch (err) {
+      setArchiveFeedback({
+        type: 'error',
+        message: parseFirestoreUiError(err),
+      });
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  const activeCandidature = useMemo(
+    () => candidature.filter((c) => !c.archiviata),
+    [candidature]
+  );
+
+  const archivedCandidature = useMemo(
+    () => candidature.filter((c) => c.archiviata),
+    [candidature]
+  );
+
   const metrics = useMemo(() => {
-    const total = candidature.length;
+    const total = activeCandidature.length;
     let daVerificare = 0;
     let completato = 0;
     let respinto = 0;
     let autorizzatiWa = 0;
 
-    for (const c of candidature) {
+    for (const c of activeCandidature) {
       const waAuth = waAuthMap[c.id];
       const simplified = resolveSimplifiedCandidaturaStato(c, waAuth);
       if (simplified === 'COMPLETATO') {
@@ -435,11 +519,11 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
       respinto,
       autorizzatiWa,
     };
-  }, [candidature, waAuthMap]);
+  }, [activeCandidature, waAuthMap]);
 
   const filteredCandidature = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    return candidature.filter((c) => {
+    return activeCandidature.filter((c) => {
       const simplified = resolveSimplifiedCandidaturaStato(c, waAuthMap[c.id]);
       if (stateFilter !== 'TUTTE' && simplified !== stateFilter) {
         return false;
@@ -458,7 +542,27 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         assignedTeam.toLowerCase().includes(q)
       );
     });
-  }, [candidature, searchTerm, stateFilter, waAuthMap]);
+  }, [activeCandidature, searchTerm, stateFilter, waAuthMap]);
+
+  const filteredArchivedCandidature = useMemo(() => {
+    const q = archivedSearchTerm.trim().toLowerCase();
+    return archivedCandidature.filter((c) => {
+      if (!q) {
+        return true;
+      }
+      const assignedTeam = waAuthMap[c.id]?.squadraAssegnataZonaVar ?? '';
+      return (
+        c.codiceCandidatura.toLowerCase().includes(q) ||
+        c.nome.toLowerCase().includes(q) ||
+        c.cognome.toLowerCase().includes(q) ||
+        c.emailFantaleghe.toLowerCase().includes(q) ||
+        c.cellulare.toLowerCase().includes(q) ||
+        c.nomeSquadra.toLowerCase().includes(q) ||
+        c.archiviataByEmail.toLowerCase().includes(q) ||
+        assignedTeam.toLowerCase().includes(q)
+      );
+    });
+  }, [archivedCandidature, archivedSearchTerm, waAuthMap]);
 
   const selectedCandidatura = useMemo(
     () => candidature.find((c) => c.id === selectedId) ?? null,
@@ -727,6 +831,18 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('archiviate')}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'archiviate'
+                ? 'bg-[#0B1F4D] text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Archive className="w-3.5 h-3.5" />
+            <span>Archiviate ({archivedCandidature.length})</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('documenti')}
             className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
               activeTab === 'documenti'
@@ -891,6 +1007,33 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
               </div>
             </div>
 
+            {archiveFeedback && (
+              <div
+                className={`rounded-2xl border p-4 flex items-start justify-between gap-3 text-xs sm:text-sm ${
+                  archiveFeedback.type === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-red-200 bg-red-50 text-red-800'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  {archiveFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5 text-emerald-700" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-red-700" />
+                  )}
+                  <span>{archiveFeedback.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArchiveFeedback(null)}
+                  aria-label="Chiudi avviso"
+                  className="p-1 rounded-lg hover:bg-black/5 cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             {candError && (
               <div className="rounded-2xl border border-red-200 bg-red-50 p-4 flex items-start gap-2.5 text-sm text-red-800">
                 <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -907,8 +1050,8 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
               <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-1.5">
                 <p className="text-base font-bold text-[#0B1F4D]">Nessuna candidatura trovata</p>
                 <p className="text-sm text-slate-600">
-                  {candidature.length === 0
-                    ? 'La raccolta candidature su Firestore è attualmente vuota.'
+                  {activeCandidature.length === 0
+                    ? 'Nessuna candidatura attiva presente nell’elenco principale.'
                     : 'Nessun risultato corrisponde ai filtri selezionati.'}
                 </p>
               </div>
@@ -984,13 +1127,23 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                         </p>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(item.id)}
-                        className="min-h-[44px] w-full px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors cursor-pointer"
-                      >
-                        DETTAGLI
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(item.id)}
+                          className="min-h-[44px] w-full px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors cursor-pointer"
+                        >
+                          DETTAGLI
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setArchiveTarget(item)}
+                          className="min-h-[44px] w-full px-4 py-2 rounded-xl border border-red-200 bg-red-50 text-red-700 text-xs font-bold hover:bg-red-100 transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>ELIMINA</span>
+                        </button>
+                      </div>
                     </article>
                     );
                   })}
@@ -1066,15 +1219,255 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                               </span>
                             </td>
                             <td className="py-3 px-4 text-right whitespace-nowrap">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedId(item.id)}
-                                className="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors cursor-pointer"
-                              >
-                                DETTAGLI
-                              </button>
+                              <div className="inline-flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedId(item.id)}
+                                  className="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors cursor-pointer"
+                                >
+                                  DETTAGLI
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setArchiveTarget(item)}
+                                  className="min-h-[36px] px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 text-xs font-bold hover:bg-red-100 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>ELIMINA</span>
+                                </button>
+                              </div>
                             </td>
                           </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* TAB: ARCHIVIATE */}
+        {activeTab === 'archiviate' && (
+          <div className="space-y-6">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-lg font-bold text-[#0B1F4D]">
+                    Archivio candidature ({archivedCandidature.length})
+                  </h2>
+                  <p className="mt-1 text-xs sm:text-sm text-slate-600">
+                    Le candidature archiviate restano conservate integralmente con dati, documenti accettati, autorizzazioni WhatsApp e storico operazioni. Puoi ripristinarle nell&apos;elenco principale in qualsiasi momento mantenendo il loro stato originale.
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="search"
+                  value={archivedSearchTerm}
+                  onChange={(e) => setArchivedSearchTerm(e.target.value)}
+                  placeholder="Cerca nelle candidature archiviate per codice, nome, email, cellulare, squadra o operatore..."
+                  className="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20"
+                />
+              </div>
+            </div>
+
+            {archiveFeedback && (
+              <div
+                className={`rounded-2xl border p-4 flex items-start justify-between gap-3 text-xs sm:text-sm ${
+                  archiveFeedback.type === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-red-200 bg-red-50 text-red-800'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  {archiveFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5 text-emerald-700" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-red-700" />
+                  )}
+                  <span>{archiveFeedback.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArchiveFeedback(null)}
+                  aria-label="Chiudi avviso"
+                  className="p-1 rounded-lg hover:bg-black/5 cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {candLoading ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#0B1F4D] mx-auto" />
+                <p className="text-sm text-slate-600">Caricamento archivio da Firestore...</p>
+              </div>
+            ) : filteredArchivedCandidature.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-1.5">
+                <p className="text-base font-bold text-[#0B1F4D]">Nessuna candidatura archiviata</p>
+                <p className="text-sm text-slate-600">
+                  {archivedCandidature.length === 0
+                    ? 'Le candidature rimosse dall’elenco principale tramite ELIMINA compariranno qui.'
+                    : 'Nessun risultato corrisponde alla ricerca nell’archivio.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Mobile Archived Cards */}
+                <div className="lg:hidden space-y-3">
+                  {filteredArchivedCandidature.map((item) => {
+                    const simplifiedStato = resolveSimplifiedCandidaturaStato(
+                      item,
+                      waAuthMap[item.id]
+                    );
+                    const isRestoring = restoringId === item.id;
+                    return (
+                      <article
+                        key={item.id}
+                        className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-mono-tabular text-xs font-bold text-[#0B1F4D]">
+                              {item.codiceCandidatura}
+                            </p>
+                            <h3 className="text-base font-bold text-slate-900">
+                              {item.nome} {item.cognome}
+                            </h3>
+                          </div>
+                          <span
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold shrink-0 ${simplifiedStatusBadgeStyle(
+                              simplifiedStato
+                            )}`}
+                          >
+                            {simplifiedStato} ({item.stato})
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-slate-600 space-y-1">
+                          <p className="break-all">
+                            <strong>Email:</strong> {item.emailFantaleghe}
+                          </p>
+                          <p>
+                            <strong>Squadra:</strong> {item.nomeSquadra}
+                          </p>
+                          <p>
+                            <strong>Archiviata da:</strong> {item.archiviataByEmail || '—'}
+                          </p>
+                          <p className="font-mono-tabular">
+                            <strong>Data archiviazione:</strong> {formatShortDate(item.archiviataAt)}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(item.id)}
+                            className="min-h-[44px] w-full px-4 py-2 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-xs font-bold hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            DETTAGLI
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(restoringId)}
+                            onClick={() => handleRestoreCandidatura(item)}
+                            className="min-h-[44px] w-full px-4 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {isRestoring ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            )}
+                            <span>RIPRISTINA CANDIDATURA</span>
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Archived Table */}
+                <div className="hidden lg:block bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
+                          <th className="py-3 px-4">Codice</th>
+                          <th className="py-3 px-4">Nome e cognome</th>
+                          <th className="py-3 px-4">Squadra</th>
+                          <th className="py-3 px-4">Stato originale</th>
+                          <th className="py-3 px-4">Archiviata da</th>
+                          <th className="py-3 px-4">Data archiviazione</th>
+                          <th className="py-3 px-4 text-right">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 text-sm">
+                        {filteredArchivedCandidature.map((item) => {
+                          const simplifiedStato = resolveSimplifiedCandidaturaStato(
+                            item,
+                            waAuthMap[item.id]
+                          );
+                          const isRestoring = restoringId === item.id;
+                          return (
+                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-3 px-4 font-mono-tabular text-xs font-bold text-[#0B1F4D] whitespace-nowrap">
+                                {item.codiceCandidatura}
+                              </td>
+                              <td className="py-3 px-4">
+                                <p className="font-semibold text-slate-900 whitespace-nowrap">
+                                  {item.nome} {item.cognome}
+                                </p>
+                                <p className="text-xs text-slate-500 break-all">
+                                  {item.emailFantaleghe}
+                                </p>
+                              </td>
+                              <td className="py-3 px-4 text-slate-800">{item.nomeSquadra}</td>
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${simplifiedStatusBadgeStyle(
+                                    simplifiedStato
+                                  )}`}
+                                >
+                                  {simplifiedStato} ({item.stato})
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 text-xs text-slate-600 break-all">
+                                {item.archiviataByEmail || '—'}
+                              </td>
+                              <td className="py-3 px-4 font-mono-tabular text-xs text-slate-600 whitespace-nowrap">
+                                {formatShortDate(item.archiviataAt)}
+                              </td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap">
+                                <div className="inline-flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedId(item.id)}
+                                    className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-[#0B1F4D] text-xs font-bold hover:bg-slate-50 transition-colors cursor-pointer"
+                                  >
+                                    DETTAGLI
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(restoringId)}
+                                    onClick={() => handleRestoreCandidatura(item)}
+                                    className="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                                  >
+                                    {isRestoring ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    )}
+                                    <span>RIPRISTINA CANDIDATURA</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
                           );
                         })}
                       </tbody>
@@ -1094,7 +1487,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
 
         {/* TAB: ACCESSI WHATSAPP */}
         {activeTab === 'whatsapp' && (
-          <AdminWhatsappSection adminUser={user} candidature={candidature} />
+          <AdminWhatsappSection adminUser={user} candidature={activeCandidature} />
         )}
 
         {/* TAB 2: CONFIGURAZIONE */}
@@ -1452,7 +1845,68 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         operationalEmail={publicConfig.emailOperativa}
         onClose={() => setSelectedId(null)}
         onWhatsappAuthChanged={loadWhatsappAuthMap}
+        onRestoreCandidatura={handleRestoreCandidatura}
       />
+
+      {archiveTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="archive-confirm-title"
+          onClick={() => {
+            if (!archiveSubmitting) {
+              setArchiveTarget(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white w-full max-w-md rounded-2xl border border-slate-200 shadow-xl p-6 space-y-5 text-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-center shrink-0">
+                <Archive className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <p className="font-mono-tabular text-xs font-bold text-[#0B1F4D]">
+                  {archiveTarget.codiceCandidatura} · {archiveTarget.nome} {archiveTarget.cognome}
+                </p>
+                <h2
+                  id="archive-confirm-title"
+                  className="font-display text-lg font-extrabold text-[#0B1F4D]"
+                >
+                  Conferma archiviazione candidatura
+                </h2>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-700 leading-relaxed">
+              Vuoi davvero archiviare questa candidatura? Non sarà più visibile nell&apos;elenco principale, ma resterà conservata nello storico e potrà essere recuperata.
+            </p>
+
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={archiveSubmitting}
+                onClick={() => setArchiveTarget(null)}
+                className="min-h-[44px] px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs sm:text-sm font-bold hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+              >
+                ANNULLA
+              </button>
+              <button
+                type="button"
+                disabled={archiveSubmitting}
+                onClick={handleConfirmArchive}
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-red-700 text-white text-xs sm:text-sm font-bold hover:bg-red-800 disabled:opacity-50 inline-flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {archiveSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>CONFERMA ARCHIVIAZIONE</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

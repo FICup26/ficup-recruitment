@@ -71,6 +71,25 @@
           "minLength": 1,
           "maxLength": 32
         },
+        "archiviata": {
+          "type": "boolean",
+          "description": "Flag di archiviazione logica gestita dall'Area Admin."
+        },
+        "archiviataAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server dell'archiviazione logica."
+        },
+        "archiviataByUid": {
+          "type": "string",
+          "description": "UID dell'amministratore che ha archiviato la candidatura.",
+          "maxLength": 128
+        },
+        "archiviataByEmail": {
+          "type": "string",
+          "description": "Email dell'amministratore che ha archiviato la candidatura.",
+          "maxLength": 160
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
