@@ -104,6 +104,6 @@ export const OFFICIAL_CHAT_RULES_SECTIONS: LegalDocumentSection[] = [
 export function maskSensitiveWhatsappLinks(rawText: string): string {
   return rawText.replace(
     /https?:\/\/chat\.whatsapp\.com\/[^\s]+/gi,
-    '[Link ufficiale riservato: si sblocca dopo il completamento confermato della candidatura]'
+    '[Link ufficiale riservato: si sblocca dopo la verifica e conferma manuale dello Staff]'
   );
 }

@@ -3,11 +3,12 @@
  * File: Code.gs
  *
  * Entrypoint Web App (doGet / doPost) per:
- * - Waiting Room sicura (verifica codice + email, sblocco WhatsApp ufficiale solo se COMPLETATO)
+ * - Waiting Room sicura (verifica codice + email, sblocco WhatsApp ufficiale solo se COMPLETATO manualmente dallo Staff)
  * - Notifiche email protette e idempotenti:
  *     1) Percorso Admin: verificato crittograficamente da Firestore tramite Firebase ID Token
  *     2) Percorso Wizard (nuova candidatura): prova di possesso (id + codice + email) + solo stato NUOVO + finestra recente + rate limit
- * - Trigger incrementale periodico (syncCandidatureTrigger ogni 10 minuti)
+ *        (invia esclusivamente le email di ricezione NUOVO_CANDIDATO e NUOVO_ADMIN, lasciando lo stato su NUOVO)
+ * - Trigger incrementale periodico (syncCandidatureTrigger ogni 10 minuti, solo invio/retry email senza mai cambiare stato)
  */
 
 function jsonResponse_(obj) {
@@ -420,69 +421,19 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     });
   }
 
-  // Idempotenza sicura e recupero storico: se già COMPLETATO non reinvia email duplicate,
-  // ma verifica/recupera l'eventuale registrazione mancante in storico_operazioni.
-  if (cand.stato === 'COMPLETATO') {
-    var existingCompletion = autoCompleteCandidaturaIfEmailConfirmed_(candidaturaId);
-    if (!existingCompletion.historyRecorded) {
-      return jsonResponse_({
-        ok: false,
-        code: existingCompletion.reason || 'HISTORY_WRITE_FAILED',
-        status: existingCompletion.reason || 'HISTORY_WRITE_FAILED',
-        completed: false,
-        historyRecorded: false,
-        emailConfirmed: Boolean(existingCompletion.emailConfirmed),
-        stato: 'COMPLETATO',
-        linkWhatsappUfficiale: null,
-        stats: { processed: 0, sent: 0, skipped: 0, failed: 0 },
-        error:
-          existingCompletion.error ||
-          'Stato COMPLETATO presente ma registrazione obbligatoria nello storico non confermata.'
-      });
-    }
-
-    if (existingCompletion.manualCompleted) {
-      var manualOfficialLink = existingCompletion.emailConfirmed
-        ? getOfficialWhatsappLinkForCandidatura_(candidaturaId)
-        : null;
-      return jsonResponse_({
-        ok: true,
-        status: 'MANUAL_ADMIN_COMPLETED',
-        completed: Boolean(existingCompletion.emailConfirmed),
-        historyRecorded: true,
-        manualCompleted: true,
-        emailConfirmed: Boolean(existingCompletion.emailConfirmed),
-        stato: 'COMPLETATO',
-        linkWhatsappUfficiale: manualOfficialLink,
-        stats: { processed: 0, sent: 0, skipped: 0, failed: 0 }
-      });
-    }
-
-    var alreadyOfficialLink = existingCompletion.emailConfirmed
-      ? getOfficialWhatsappLinkForCandidatura_(candidaturaId)
-      : null;
-    return jsonResponse_({
-      ok: true,
-      status: existingCompletion.historyRecovered ? 'COMPLETED' : 'ALREADY_COMPLETED',
-      completed: Boolean(existingCompletion.completed && existingCompletion.historyRecorded),
-      historyRecorded: true,
-      historyRecovered: Boolean(existingCompletion.historyRecovered),
-      emailConfirmed: Boolean(existingCompletion.emailConfirmed),
-      stato: 'COMPLETATO',
-      linkWhatsappUfficiale: alreadyOfficialLink,
-      stats: { processed: 0, sent: 0, skipped: 0, failed: 0 }
-    });
-  }
-
+  // Solo candidature ancora in stato NUOVO ricevono la notifica pubblica iniziale.
+  // Nessun processo automatico puo promuovere la candidatura a COMPLETATO:
+  // il completamento avviene esclusivamente tramite intervento manuale dello Staff.
   if (cand.stato !== 'NUOVO') {
     return jsonResponse_({
       ok: false,
       code: 'FORBIDDEN_STATE',
+      status: 'FORBIDDEN_STATE',
       completed: false,
-      emailConfirmed: false,
+      emailConfirmed: areNuovoEmailsConfirmedSent_(candidaturaId),
       stato: String(cand.stato || ''),
       linkWhatsappUfficiale: null,
-      error: 'Questo endpoint pubblico è consentito esclusivamente per nuove candidature.'
+      error: 'Questo endpoint pubblico è consentito esclusivamente per nuove candidature in attesa di verifica.'
     });
   }
 
@@ -495,9 +446,9 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
         status: 'DEFERRED_TO_TRIGGER',
         completed: false,
         emailConfirmed: false,
-        stato: String(cand.stato || 'NUOVO'),
+        stato: 'NUOVO',
         linkWhatsappUfficiale: null,
-        error: 'Finestra di verifica immediata superata; il trigger periodico completerà la pratica.'
+        error: 'Finestra di notifica immediata superata; il trigger periodico completerà l’invio delle email di ricezione. La candidatura resta su NUOVO in attesa di verifica dello Staff.'
       });
     }
   }
@@ -507,9 +458,10 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
     return jsonResponse_({
       ok: false,
       code: 'RATE_LIMITED',
+      status: 'RATE_LIMITED',
       completed: false,
       emailConfirmed: false,
-      stato: String(cand.stato || 'NUOVO'),
+      stato: 'NUOVO',
       linkWhatsappUfficiale: null,
       error: 'Troppi invii ravvicinati verso questo indirizzo email.'
     });
@@ -532,49 +484,16 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
       stato: 'NUOVO',
       linkWhatsappUfficiale: null,
       stats: stats,
-      error: 'Invio email non confermato dal server: stato candidatura mantenuto su NUOVO.'
-    });
-  }
-
-  var completion = autoCompleteCandidaturaIfEmailConfirmed_(candidaturaId);
-  if (completion.completed && completion.historyRecorded && completion.stato === 'COMPLETATO') {
-    var officialWhatsappLink = getOfficialWhatsappLinkForCandidatura_(candidaturaId);
-    return jsonResponse_({
-      ok: true,
-      status: completion.alreadyCompleted ? 'ALREADY_COMPLETED' : 'COMPLETED',
-      completed: true,
-      historyRecorded: true,
-      emailConfirmed: true,
-      stato: 'COMPLETATO',
-      linkWhatsappUfficiale: officialWhatsappLink,
-      stats: stats
-    });
-  }
-
-  if (completion.reason === 'HISTORY_WRITE_FAILED') {
-    return jsonResponse_({
-      ok: false,
-      code: 'HISTORY_WRITE_FAILED',
-      status: 'HISTORY_WRITE_FAILED',
-      completed: false,
-      historyRecorded: false,
-      emailConfirmed: true,
-      stato: 'COMPLETATO',
-      linkWhatsappUfficiale: null,
-      stats: stats,
-      error:
-        completion.error ||
-        'Stato aggiornato a COMPLETATO ma registrazione obbligatoria nello storico operazioni non riuscita.'
+      error: 'Candidatura salvata su NUOVO in attesa di verifica Staff; invio email di ricezione ancora in elaborazione.'
     });
   }
 
   return jsonResponse_({
     ok: true,
-    status: completion.reason || 'NOT_COMPLETED',
+    status: 'RECEIVED_PENDING_STAFF_REVIEW',
     completed: false,
-    historyRecorded: Boolean(completion.historyRecorded),
     emailConfirmed: true,
-    stato: completion.stato || String(cand.stato || 'NUOVO'),
+    stato: 'NUOVO',
     linkWhatsappUfficiale: null,
     stats: stats
   });
@@ -583,7 +502,7 @@ function handlePublicWizardNotify_(candidaturaId, code, email) {
 /**
  * Trigger temporale periodico incrementale (ogni 10 minuti).
  * Legge solo le candidature con updatedAt > LAST_SYNC_ISO per rispettare le quote Spark,
- * con limite di sicurezza per singolo ciclo più eventuali retry controllati.
+ * invia eventuali email pendenti e riesegue i retry senza MAI modificare lo stato della candidatura.
  */
 function syncCandidatureTrigger() {
   var props = PropertiesService.getScriptProperties();
@@ -609,48 +528,18 @@ function syncCandidatureTrigger() {
   var maxUpdatedIso = lastSyncIso;
   var sentInRun = 0;
   var processedCount = 0;
-  var hasPendingHistoryFailure = false;
 
   for (var i = 0; i < docs.length; i++) {
     if (sentInRun >= FICUP_CONFIG.MAX_EMAILS_PER_TRIGGER_RUN) {
       break;
     }
     var cand = docs[i];
-    var candHealthy = true;
     if (cand.archiviata !== true) {
-      if (
-        String(cand.stato || '') === 'COMPLETATO' &&
-        !fsGetDocument_('storico_operazioni', buildAutoCompletionHistoryId_(cand.id)) &&
-        !hasManualAdminHistory_(cand.id) &&
-        areNuovoEmailsConfirmedSent_(cand.id)
-      ) {
-        var recRes = autoCompleteCandidaturaIfEmailConfirmed_(cand.id);
-        if (!recRes.historyRecorded) {
-          candHealthy = false;
-          hasPendingHistoryFailure = true;
-        }
-      }
-
-      if (candHealthy) {
-        var stats = processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: false });
-        sentInRun += stats.sent || 0;
-        if (
-          String(cand.stato || '') === 'NUOVO' &&
-          (stats.failed || 0) === 0 &&
-          areNuovoEmailsConfirmedSent_(cand.id)
-        ) {
-          var compRes = autoCompleteCandidaturaIfEmailConfirmed_(cand.id);
-          if (compRes.reason === 'HISTORY_WRITE_FAILED') {
-            candHealthy = false;
-            hasPendingHistoryFailure = true;
-          }
-        }
-      }
+      var stats = processCandidaturaNotifications_(cand, publicCfg, { isPublicTrigger: false });
+      sentInRun += stats.sent || 0;
     }
     processedCount += 1;
     if (
-      !hasPendingHistoryFailure &&
-      candHealthy &&
       cand.updatedAt &&
       new Date(cand.updatedAt).getTime() > new Date(maxUpdatedIso).getTime()
     ) {

@@ -137,6 +137,12 @@ export async function fetchWaitingRoomStatus(params: {
   };
 }
 
+export type PublicNotificationOutcome =
+  | 'emails_confirmed'
+  | 'emails_pending'
+  | 'notification_error'
+  | 'forbidden_state';
+
 export interface TriggerCandidaturaNotificationParams {
   candidaturaId: string;
   idToken?: string;
@@ -147,15 +153,14 @@ export interface TriggerCandidaturaNotificationParams {
 export interface TriggerCandidaturaNotificationResult {
   triggered: boolean;
   sent: number;
+  outcome: PublicNotificationOutcome;
   code?: string;
   status?: string;
   emailConfirmed: boolean;
-  completed: boolean;
-  historyRecorded: boolean;
-  historyRecovered?: boolean;
-  manualCompleted?: boolean;
+  pending: boolean;
+  completed: false;
   stato?: CandidaturaStato;
-  linkWhatsappUfficiale: string | null;
+  linkWhatsappUfficiale: null;
   detail?: string;
   canRetry: boolean;
 }
@@ -163,16 +168,16 @@ export interface TriggerCandidaturaNotificationResult {
 const NON_RETRYABLE_CODES = new Set([
   'FORBIDDEN_STATE',
   'ARCHIVED',
-  'MANUAL_ADMIN_HISTORY',
   'NOT_FOUND',
   'UNAUTHORIZED',
   'INVALID_INPUT',
 ]);
 
 /**
- * Invia una segnalazione protetta ad Apps Script affinché elabori l'invio email
- * idempotente e, SOLO a conferma reale di email + storico + stato COMPLETATO,
- * riconosca il completamento restituendo l'eventuale link al Gruppo WhatsApp Ufficiale.
+ * Invia una segnalazione protetta ad Apps Script per elaborare le email idempotenti
+ * di ricezione (percorso pubblico) o di cambio stato (percorso Admin autenticato).
+ * Sul percorso pubblico non completa mai la candidatura e non restituisce mai
+ * il link WhatsApp ufficiale: il passaggio a COMPLETATO resta esclusivamente manuale (Staff).
  */
 export async function triggerCandidaturaNotification(
   params: TriggerCandidaturaNotificationParams
@@ -181,9 +186,10 @@ export async function triggerCandidaturaNotification(
     return {
       triggered: false,
       sent: 0,
+      outcome: 'notification_error',
       emailConfirmed: false,
+      pending: false,
       completed: false,
-      historyRecorded: false,
       linkWhatsappUfficiale: null,
       canRetry: false,
     };
@@ -203,9 +209,10 @@ export async function triggerCandidaturaNotification(
     return {
       triggered: false,
       sent: 0,
+      outcome: 'notification_error',
       emailConfirmed: false,
+      pending: false,
       completed: false,
-      historyRecorded: false,
       linkWhatsappUfficiale: null,
       canRetry: false,
     };
@@ -216,57 +223,97 @@ export async function triggerCandidaturaNotification(
     const code = typeof res.code === 'string' ? res.code : undefined;
     const status = typeof res.status === 'string' ? res.status : undefined;
     const emailConfirmed = res.emailConfirmed === true;
-    const historyRecorded = res.historyRecorded === true;
-    const historyRecovered = res.historyRecovered === true;
-    const manualCompleted = res.manualCompleted === true;
-    const completed = Boolean(
-      res.ok === true &&
-        emailConfirmed &&
-        res.completed === true &&
-        historyRecorded &&
-        res.stato === 'COMPLETATO'
-    );
-    const linkWhatsappUfficiale = completed
-      ? sanitizeHttpsWhatsappUrl(res.linkWhatsappUfficiale)
-      : null;
+    const detail = typeof res.error === 'string' ? res.error : undefined;
 
-    const canRetry =
-      !completed &&
-      !manualCompleted &&
-      !(code && NON_RETRYABLE_CODES.has(code)) &&
-      !(status && NON_RETRYABLE_CODES.has(status));
+    const isForbidden =
+      (code && NON_RETRYABLE_CODES.has(code)) ||
+      (status && NON_RETRYABLE_CODES.has(status));
 
-    let detail = typeof res.error === 'string' ? res.error : undefined;
-    if (!detail && res.ok === true && res.completed === true && !historyRecorded) {
-      detail =
-        'Il backend non ha confermato la registrazione nello storico operazioni (historyRecorded: false).';
+    if (isForbidden) {
+      return {
+        triggered: Boolean(res.ok),
+        sent: Number(res.stats?.sent ?? 0),
+        outcome: 'forbidden_state',
+        code,
+        status,
+        emailConfirmed,
+        pending: false,
+        completed: false,
+        stato: res.stato,
+        linkWhatsappUfficiale: null,
+        detail,
+        canRetry: false,
+      };
+    }
+
+    const isPending =
+      code === 'DEFERRED_TO_TRIGGER' ||
+      code === 'RATE_LIMITED' ||
+      status === 'EMAIL_NOT_CONFIRMED' ||
+      (res.ok === true && !params.idToken && !emailConfirmed);
+
+    if (isPending) {
+      return {
+        triggered: Boolean(res.ok),
+        sent: Number(res.stats?.sent ?? 0),
+        outcome: 'emails_pending',
+        code,
+        status,
+        emailConfirmed: false,
+        pending: true,
+        completed: false,
+        stato: res.stato ?? 'NUOVO',
+        linkWhatsappUfficiale: null,
+        detail,
+        canRetry: code !== 'DEFERRED_TO_TRIGGER' && code !== 'RATE_LIMITED',
+      };
+    }
+
+    if (res.ok === true && (emailConfirmed || Boolean(params.idToken))) {
+      return {
+        triggered: true,
+        sent: Number(res.stats?.sent ?? 0),
+        outcome: 'emails_confirmed',
+        code,
+        status,
+        emailConfirmed: true,
+        pending: false,
+        completed: false,
+        stato: res.stato ?? 'NUOVO',
+        linkWhatsappUfficiale: null,
+        detail,
+        canRetry: false,
+      };
     }
 
     return {
-      triggered: Boolean(res.ok),
+      triggered: false,
       sent: Number(res.stats?.sent ?? 0),
+      outcome: 'notification_error',
       code,
       status,
-      emailConfirmed,
-      completed,
-      historyRecorded,
-      historyRecovered,
-      manualCompleted,
+      emailConfirmed: false,
+      pending: false,
+      completed: false,
       stato: res.stato,
-      linkWhatsappUfficiale,
-      detail,
-      canRetry,
+      linkWhatsappUfficiale: null,
+      detail: detail ?? 'Errore nella segnalazione email al backend.',
+      canRetry: true,
     };
   } catch (err) {
     return {
       triggered: false,
       sent: 0,
+      outcome: 'notification_error',
       emailConfirmed: false,
+      pending: false,
       completed: false,
-      historyRecorded: false,
       linkWhatsappUfficiale: null,
       canRetry: true,
-      detail: err instanceof Error ? err.message : 'Errore temporaneo nella comunicazione con il backend.',
+      detail:
+        err instanceof Error
+          ? err.message
+          : 'Errore temporaneo nella comunicazione con il backend.',
     };
   }
 }

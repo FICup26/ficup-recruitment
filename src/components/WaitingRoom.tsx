@@ -186,10 +186,10 @@ function buildRealTimelineStages(
       title: 'Verifica dati & email',
       description:
         stageLevel > 2
-          ? 'Verifica preliminare e conferma invio email completate.'
+          ? 'Verifica preliminare dello Staff FICUP completata.'
           : realState === 'DA CONTATTARE'
-            ? 'Lo staff ti contatterà o ti attende sul gruppo WhatsApp provvisorio per completare la verifica.'
-            : 'La richiesta è in attesa di conferma invio email / verifica.',
+            ? 'Lo Staff ti contatterà o ti attende sul gruppo WhatsApp provvisorio per completare la verifica.'
+            : 'La candidatura è registrata ed è in attesa di verifica manuale da parte dello Staff.',
       status: stageLevel > 2 ? 'completed' : 'active',
     },
     {
@@ -197,10 +197,10 @@ function buildRealTimelineStages(
       title: 'Conferma idoneità',
       description:
         stageLevel === 3
-          ? 'Candidatura approvata! Invito ufficiale in preparazione.'
+          ? 'Candidatura approvata dallo Staff! Invito ufficiale in preparazione.'
           : stageLevel > 3
-            ? 'Requisiti confermati per la partecipazione FICUP.'
-            : 'Si completa automaticamente a verifica email confermata o su approvazione staff.',
+            ? 'Requisiti confermati dallo Staff FICUP.'
+            : 'Avanza dopo la verifica manuale della candidatura da parte dello Staff.',
       status: stageLevel > 3 ? 'completed' : stageLevel === 3 ? 'active' : 'locked',
     },
     {

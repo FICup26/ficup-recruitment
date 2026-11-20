@@ -70,32 +70,13 @@ const STEP_LABELS = [
   'Prossimi Passaggi',
 ] as const;
 
-const PENDING_COMPLETION_TASKS = [
-  'Verifica o completa l’invio nella tua Area Personale con il codice FICUP26.',
-  'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
-  'Completa il login o la registrazione su Fantaleghe e accedi a FICUP.',
-  'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
-  'Se hai bisogno di assistenza, utilizza il gruppo WhatsApp provvisorio indicando il tuo codice FICUP26.',
-  'Al completamento automatico confermato (stato COMPLETATO con storico registrato), accedi al Gruppo WhatsApp Ufficiale dal pulsante dedicato o dall’Area Personale.',
-];
-
-const CONFIRMED_COMPLETION_TASKS = [
-  'Stato candidatura confermato su COMPLETATO con storico operazioni registrato e consultabile nella tua Area Personale.',
-  'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
-  'Completa il login o la registrazione su Fantaleghe e accedi a FICUP.',
-  'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
-  'Utilizza il tuo codice FICUP26 in caso di richieste di supporto tecnico.',
-  'Accedi direttamente al Gruppo WhatsApp Ufficiale dal pulsante qui sopra o dalla tua Area Personale.',
-];
-
 export type WizardEmailDispatchState =
   | 'idle'
   | 'sending'
-  | 'completed'
-  | 'history_failed'
-  | 'manual_completed'
+  | 'emails_confirmed'
+  | 'emails_pending'
+  | 'notification_error'
   | 'forbidden_state'
-  | 'failed_or_pending'
   | 'unconfigured';
 
 export interface SubmittedWizardRecord {
@@ -105,9 +86,9 @@ export interface SubmittedWizardRecord {
   cellulare: string;
   nomeSquadra: string;
   nomeCompleto: string;
+  note?: string;
   submittedAtIso: string;
   stato: CandidaturaStato;
-  officialWhatsappLink: string | null;
 }
 
 export interface RecruitmentStep6Props {
@@ -119,12 +100,32 @@ export interface RecruitmentStep6Props {
   emailDispatchState: WizardEmailDispatchState;
   emailDispatchDetail: string | null;
   isAppsScriptReady: boolean;
-  checkedTasks: boolean[];
-  onToggleChecklist: (index: number) => void;
-  onRetryEmailCompletion: () => void;
+  canRetryEmail?: boolean;
+  onRetryEmailNotification: () => void;
   onExitToHome: () => void;
   onOpenWaitingRoom?: () => void;
 }
+
+const VISUAL_FLOW_STEPS = [
+  {
+    number: '1',
+    title: 'CANDIDATURA RICEVUTA',
+    description: 'I tuoi dati sono stati registrati.',
+    state: 'done' as const,
+  },
+  {
+    number: '2',
+    title: 'VERIFICA DELLO STAFF',
+    description: 'Il nostro Staff controllerà la candidatura.',
+    state: 'current' as const,
+  },
+  {
+    number: '3',
+    title: 'CONFERMA FINALE',
+    description: 'Riceverai un aggiornamento quando la verifica sarà completata.',
+    state: 'upcoming' as const,
+  },
+];
 
 export function RecruitmentStep6({
   config,
@@ -132,19 +133,12 @@ export function RecruitmentStep6({
   emailDispatchState,
   emailDispatchDetail,
   isAppsScriptReady,
-  checkedTasks,
-  onToggleChecklist,
-  onRetryEmailCompletion,
+  canRetryEmail = false,
+  onRetryEmailNotification,
   onExitToHome,
   onOpenWaitingRoom,
 }: RecruitmentStep6Props) {
-  const isAutoCompletedConfirmed = Boolean(
-    submittedRecord?.stato === 'COMPLETATO' && emailDispatchState === 'completed'
-  );
   const codiceCandidatura = submittedRecord?.codiceCandidatura ?? 'FICUP26';
-  const checklistItems = isAutoCompletedConfirmed
-    ? CONFIRMED_COMPLETION_TASKS
-    : PENDING_COMPLETION_TASKS;
 
   return (
     <motion.div
@@ -155,117 +149,144 @@ export function RecruitmentStep6({
       transition={{ duration: 0.2 }}
       className="space-y-6"
     >
-      <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-          Passaggio 6 · Prossimi passaggi e Area Personale
-        </p>
-        <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-          Prossimi passaggi verso la lega
+      {/* Intestazione conferma ricezione */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span className="font-bold uppercase tracking-widest text-[#C69214]">
+            Passaggio 6 · Conferma e prossimi passaggi
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
+            {codiceCandidatura}
+          </span>
+        </div>
+
+        <h1 className="font-display text-2xl sm:text-3xl font-black tracking-tight text-[#0B1F4D]">
+          LA TUA CANDIDATURA È STATA RICEVUTA!
         </h1>
-        <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
-          {isAutoCompletedConfirmed
-            ? `La tua candidatura (${codiceCandidatura}) è in stato COMPLETATO con email e storico operazioni registrati. Puoi accedere subito al Gruppo WhatsApp Ufficiale e consultarla nell’Area Personale.`
-            : emailDispatchState === 'sending'
-              ? `Completamento automatico della candidatura (${codiceCandidatura}) in corso: il backend sta confermando l’invio delle email e la registrazione nello storico operazioni.`
-              : emailDispatchState === 'history_failed'
-                ? `La candidatura (${codiceCandidatura}) e le email sono state elaborate, ma la registrazione nello storico operazioni non è ancora confermata dal backend. Completa il nuovo tentativo qui sotto o verifica nella tua Area Personale.`
-                : emailDispatchState === 'manual_completed'
-                  ? `La candidatura (${codiceCandidatura}) risulta già impostata su ${submittedRecord?.stato ?? 'COMPLETATO'}. Controlla stato e dettagli aggiornati nella tua Area Personale.`
-                  : `La candidatura (${codiceCandidatura}) è registrata su Firestore (stato ${submittedRecord?.stato ?? 'NUOVO'}). Monitora il completamento automatico nella tua Area Personale e usa il gruppo provvisorio per eventuale supporto.`}
-        </p>
+
+        <div className="rounded-2xl border border-[#0B1F4D]/15 bg-[#0B1F4D]/[0.03] px-4 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <Hourglass className="w-4 h-4 text-[#C69214] shrink-0" />
+            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
+              Stato attuale
+            </span>
+          </div>
+          <span className="font-mono-tabular text-xs sm:text-sm font-extrabold tracking-wide text-[#0B1F4D]">
+            IN ATTESA DI VERIFICA STAFF
+          </span>
+        </div>
       </div>
 
-      {isAutoCompletedConfirmed ? (
-        <div className="rounded-3xl bg-[#071436] text-white border border-[#D4AF37]/50 p-5 sm:p-6 space-y-4">
-          <div className="space-y-1">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FDE68A]">
-              Stato COMPLETATO e storico confermati
-            </p>
-            <h2 className="font-display text-2xl sm:text-3xl font-black text-white">
-              COMPLIMENTI 👏
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-              Invio email e registrazione nello storico operazioni confermati automaticamente dal sistema. Accedi subito al Gruppo WhatsApp Ufficiale qui sotto.
-            </p>
-          </div>
-          {submittedRecord?.officialWhatsappLink ? (
-            <a
-              href={submittedRecord.officialWhatsappLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="min-h-[50px] w-full px-5 py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 transition-all inline-flex items-center justify-center gap-2"
-            >
-              <MessageCircle className="w-4 h-4" />
-              <span>ENTRA NEL GRUPPO WHATSAPP UFFICIALE</span>
-              <ExternalLink className="w-4 h-4" />
-            </a>
-          ) : (
-            <p className="text-xs text-amber-200">
-              Il link del Gruppo WhatsApp Ufficiale sarà disponibile nella tua Area Personale non appena configurato per la stagione corrente.
-            </p>
-          )}
+      {/* Percorso visivo a 3 step */}
+      <div className="space-y-3">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Percorso della tua candidatura
+        </p>
+        <div className="divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          {VISUAL_FLOW_STEPS.map((item) => {
+            const isDone = item.state === 'done';
+            const isCurrent = item.state === 'current';
+            return (
+              <div
+                key={item.number}
+                className={`p-4 sm:p-5 flex items-start gap-4 ${
+                  isCurrent ? 'bg-amber-50/40' : isDone ? 'bg-emerald-50/35' : 'bg-white'
+                }`}
+              >
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-mono-tabular text-sm font-extrabold ${
+                    isDone
+                      ? 'bg-emerald-700 text-white'
+                      : isCurrent
+                        ? 'bg-[#0B1F4D] text-[#D4AF37]'
+                        : 'bg-slate-100 text-slate-500 border border-slate-200'
+                  }`}
+                >
+                  {isDone ? <Check className="w-4 h-4" /> : item.number}
+                </div>
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <h2 className="font-display text-sm sm:text-base font-extrabold text-[#0B1F4D]">
+                    {item.number}. {item.title}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                    {item.description}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      ) : emailDispatchState === 'sending' ? (
+      </div>
+
+      {/* Stato invio email di ricezione (non influenza lo stato della candidatura) */}
+      {emailDispatchState === 'sending' ? (
         <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-[#0B1F4D]">
           <Loader2 className="w-5 h-5 animate-spin text-[#0284C7] shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            <strong>Completamento automatico in corso:</strong> stiamo attendendo la conferma delle email e la registrazione obbligatoria nello storico operazioni. Il collegamento al Gruppo WhatsApp Ufficiale resta protetto fino alla conferma del backend.
+            <strong>Email di ricezione in invio:</strong> stiamo inviando la conferma di registrazione al tuo indirizzo email e notificando lo Staff. La candidatura è già salvata con codice <span className="font-mono-tabular font-bold">{codiceCandidatura}</span>.
           </p>
         </div>
-      ) : emailDispatchState === 'history_failed' ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50/80 p-4 sm:p-5 space-y-3 text-xs sm:text-sm text-red-950">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="font-bold">
-                Storico operazioni non ancora confermato ({emailDispatchDetail || 'HISTORY_WRITE_FAILED'})
-              </p>
-              <p className="leading-relaxed">
-                <strong>Gruppo WhatsApp Ufficiale protetto:</strong> le email sono state elaborate, ma senza la registrazione confermata in <span className="font-mono-tabular font-semibold">storico_operazioni</span> il completamento definitivo e l&apos;accesso al gruppo ufficiale restano bloccati. Riprova in sicurezza senza creare duplicati.
-              </p>
-            </div>
-          </div>
-          {isAppsScriptReady && (
-            <button
-              type="button"
-              onClick={onRetryEmailCompletion}
-              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-              <span>Riprova registrazione storico e completamento</span>
-            </button>
-          )}
-        </div>
-      ) : emailDispatchState === 'manual_completed' ? (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-[#0B1F4D]">
-          <ShieldCheck className="w-5 h-5 text-[#0284C7] shrink-0 mt-0.5" />
+      ) : emailDispatchState === 'emails_confirmed' ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-emerald-950">
+          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            <strong>Gruppo WhatsApp Ufficiale protetto:</strong> la candidatura risulta già gestita direttamente sullo stato <span className="font-mono-tabular font-bold">{submittedRecord?.stato ?? 'COMPLETATO'}</span>. Verifica nella tua Area Personale l&apos;eventuale accesso WhatsApp abilitato.
+            <strong>Email di ricezione confermate:</strong> abbiamo inviato il riepilogo al tuo indirizzo email (controlla anche Spam o Promozioni) e avvisato lo Staff per la verifica manuale.
           </p>
         </div>
-      ) : (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 sm:p-5 space-y-3 text-xs sm:text-sm text-amber-950">
+      ) : emailDispatchState === 'emails_pending' ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3 text-xs sm:text-sm text-amber-950">
           <div className="flex items-start gap-3">
-            <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
             <p className="leading-relaxed">
-              <strong>Gruppo WhatsApp Ufficiale protetto:</strong> per sicurezza il collegamento ufficiale resta bloccato e si sblocca esclusivamente quando il backend conferma lo stato <span className="font-mono-tabular font-bold">COMPLETATO</span> insieme all&apos;invio email e alla registrazione nello storico operazioni.
+              <strong>Candidatura salvata · Email ancora in elaborazione:</strong> la tua richiesta è regolarmente registrata in stato <span className="font-mono-tabular font-bold">NUOVO</span>; la notifica email è in coda di invio.
               {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
             </p>
           </div>
-          {emailDispatchState === 'failed_or_pending' && isAppsScriptReady && (
+          {canRetryEmail && isAppsScriptReady && (
             <button
               type="button"
-              onClick={onRetryEmailCompletion}
+              onClick={onRetryEmailNotification}
               className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-              <span>Riprova verifica email e completamento</span>
+              <span>Riprova invio email di ricezione</span>
             </button>
           )}
         </div>
-      )}
+      ) : emailDispatchState === 'notification_error' || emailDispatchState === 'unconfigured' ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3 text-xs sm:text-sm text-amber-950">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+            <p className="leading-relaxed">
+              <strong>Candidatura salvata · Notifica email non immediata:</strong> la candidatura è registrata su Firestore con codice <span className="font-mono-tabular font-bold">{codiceCandidatura}</span> in attesa di verifica Staff
+              {emailDispatchState === 'unconfigured'
+                ? ' (servizio email automatico non collegato in questo ambiente).'
+                : `.${emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}`}
+            </p>
+          </div>
+          {emailDispatchState === 'notification_error' && canRetryEmail && isAppsScriptReady && (
+            <button
+              type="button"
+              onClick={onRetryEmailNotification}
+              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
+              <span>Riprova invio email di ricezione</span>
+            </button>
+          )}
+        </div>
+      ) : null}
 
-      {/* Provisional WhatsApp Group (Supporto) */}
+      {/* Protezione Gruppo WhatsApp Ufficiale — sempre bloccato prima della conferma manuale Staff */}
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 flex items-start gap-3 text-xs sm:text-sm text-slate-700">
+        <Lock className="w-5 h-5 text-[#0B1F4D] shrink-0 mt-0.5" />
+        <p className="leading-relaxed">
+          <strong className="text-[#0B1F4D]">Gruppo WhatsApp Ufficiale protetto:</strong> il collegamento al gruppo ufficiale resta riservato e si sblocca nella tua Area Personale esclusivamente dopo la verifica manuale e la conferma finale da parte dello Staff.
+        </p>
+      </div>
+
+      {/* Gruppo WhatsApp Provvisorio di supporto */}
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-3">
         <div className="flex items-center gap-2 text-emerald-900">
           <MessageCircle className="w-5 h-5 text-emerald-700" />
@@ -274,11 +295,8 @@ export function RecruitmentStep6({
           </h2>
         </div>
         <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-          {isAutoCompletedConfirmed
-            ? 'Canale facoltativo di supporto community se hai bisogno di assistenza prima di iniziare in lega. Indica il tuo codice '
-            : 'Canale facoltativo di supporto community per assistenza tecnica prima del completamento automatico. Indica il tuo codice '}
-          <strong className="font-mono-tabular text-[#0B1F4D]">{codiceCandidatura}</strong>{' '}
-          quando scrivi in chat.
+          Canale facoltativo di supporto community mentre attendi la verifica dello Staff. Se scrivi in chat per ricevere assistenza, indica il tuo codice{' '}
+          <strong className="font-mono-tabular text-[#0B1F4D]">{codiceCandidatura}</strong>.
         </p>
         <a
           href={config.linkWhatsappProvvisorio}
@@ -290,37 +308,6 @@ export function RecruitmentStep6({
           <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
           <ExternalLink className="w-4 h-4 opacity-80" />
         </a>
-      </div>
-
-      {/* Completion Checklist */}
-      <div className="space-y-2.5">
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-          Promemoria percorso di ingresso
-        </p>
-        {checklistItems.map((task, idx) => {
-          const checked = checkedTasks[idx] ?? false;
-          return (
-            <label
-              key={task}
-              className={`flex items-start gap-3 p-3.5 rounded-xl border transition-colors cursor-pointer ${
-                checked
-                  ? 'bg-emerald-50/70 border-emerald-200 text-slate-900'
-                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100/70'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => onToggleChecklist(idx)}
-                className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
-              />
-              <span className="text-xs sm:text-sm leading-snug">
-                <strong className="font-mono-tabular text-[#0B1F4D] mr-1.5">{idx + 1}.</strong>
-                {task}
-              </span>
-            </label>
-          );
-        })}
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex items-start gap-2.5 text-xs text-slate-600">
@@ -348,7 +335,7 @@ export function RecruitmentStep6({
             className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
           >
             <DoorOpen className="w-4 h-4 text-[#D4AF37]" />
-            <span>APRI AREA PERSONALE</span>
+            <span>VAI ALLA MIA AREA PERSONALE</span>
           </button>
         )}
       </div>
@@ -400,12 +387,8 @@ export function RecruitmentWizard({
   const [submittedRecord, setSubmittedRecord] = useState<SubmittedWizardRecord | null>(null);
   const [emailDispatchState, setEmailDispatchState] = useState<WizardEmailDispatchState>('idle');
   const [emailDispatchDetail, setEmailDispatchDetail] = useState<string | null>(null);
+  const [canRetryEmail, setCanRetryEmail] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-
-  // Step 6 local checklist state
-  const [checkedTasks, setCheckedTasks] = useState<boolean[]>(() =>
-    PENDING_COMPLETION_TASKS.map(() => false)
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -602,16 +585,16 @@ export function RecruitmentWizard({
       }
 
       const nomeCompleto = `${clean.nome} ${clean.cognome}`;
-      const baseRecord = {
+      const baseRecord: SubmittedWizardRecord = {
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
         cellulare: clean.cellulare,
         nomeSquadra: clean.nomeSquadra,
         nomeCompleto,
+        note: clean.note || undefined,
         submittedAtIso,
-        stato: 'NUOVO' as CandidaturaStato,
-        officialWhatsappLink: null as string | null,
+        stato: 'NUOVO',
       };
       setSubmittedRecord(baseRecord);
 
@@ -636,88 +619,24 @@ export function RecruitmentWizard({
         candidaturaId: string,
         res: TriggerCandidaturaNotificationResult
       ) => {
-        if (res.completed && res.historyRecorded && res.emailConfirmed && res.stato === 'COMPLETATO') {
+        if (res.stato) {
           setSubmittedRecord((prev) =>
-            prev && prev.id === candidaturaId
-              ? {
-                  ...prev,
-                  stato: 'COMPLETATO',
-                  officialWhatsappLink: res.linkWhatsappUfficiale,
-                }
-              : prev
+            prev && prev.id === candidaturaId ? { ...prev, stato: res.stato! } : prev
           );
-          setEmailDispatchState('completed');
-          setEmailDispatchDetail(null);
-          return;
         }
-
-        if (
-          res.code === 'HISTORY_WRITE_FAILED' ||
-          res.status === 'HISTORY_WRITE_FAILED'
-        ) {
-          setSubmittedRecord((prev) =>
-            prev && prev.id === candidaturaId
-              ? {
-                  ...prev,
-                  stato: res.stato ?? prev.stato,
-                  officialWhatsappLink: null,
-                }
-              : prev
-          );
-          setEmailDispatchState('history_failed');
-          setEmailDispatchDetail(res.detail ?? null);
-          return;
-        }
-
-        if (res.manualCompleted || res.status === 'MANUAL_ADMIN_COMPLETED') {
-          setSubmittedRecord((prev) =>
-            prev && prev.id === candidaturaId
-              ? {
-                  ...prev,
-                  stato: res.stato ?? 'COMPLETATO',
-                  officialWhatsappLink: null,
-                }
-              : prev
-          );
-          setEmailDispatchState('manual_completed');
-          setEmailDispatchDetail(res.detail ?? null);
-          return;
-        }
-
-        if (!res.canRetry) {
-          setSubmittedRecord((prev) =>
-            prev && prev.id === candidaturaId
-              ? {
-                  ...prev,
-                  stato: res.stato ?? prev.stato,
-                  officialWhatsappLink: null,
-                }
-              : prev
-          );
-          setEmailDispatchState('forbidden_state');
-          setEmailDispatchDetail(res.detail ?? null);
-          return;
-        }
-
-        setSubmittedRecord((prev) =>
-          prev && prev.id === candidaturaId
-            ? {
-                ...prev,
-                stato: res.stato ?? prev.stato,
-                officialWhatsappLink: null,
-              }
-            : prev
-        );
-        setEmailDispatchState('failed_or_pending');
+        setEmailDispatchState(res.outcome);
         setEmailDispatchDetail(res.detail ?? null);
+        setCanRetryEmail(res.canRetry);
       };
 
       if (!isAppsScriptConfigured) {
         setEmailDispatchState('unconfigured');
         setEmailDispatchDetail(null);
+        setCanRetryEmail(false);
       } else {
         setEmailDispatchState('sending');
         setEmailDispatchDetail(null);
+        setCanRetryEmail(false);
         triggerCandidaturaNotification({
           candidaturaId: result.id,
           codiceCandidatura: result.codiceCandidatura,
@@ -731,88 +650,29 @@ export function RecruitmentWizard({
     }
   };
 
-  const handleRetryEmailCompletion = async () => {
+  const handleRetryEmailNotification = async () => {
     if (!submittedRecord || !isAppsScriptConfigured || emailDispatchState === 'sending') {
       return;
     }
-    if (
-      emailDispatchState === 'completed' ||
-      emailDispatchState === 'manual_completed' ||
-      emailDispatchState === 'forbidden_state'
-    ) {
+    if (emailDispatchState === 'emails_confirmed' || emailDispatchState === 'forbidden_state') {
       return;
     }
     setEmailDispatchState('sending');
     setEmailDispatchDetail(null);
+    setCanRetryEmail(false);
     const res = await triggerCandidaturaNotification({
       candidaturaId: submittedRecord.id,
       codiceCandidatura: submittedRecord.codiceCandidatura,
       emailFantaleghe: submittedRecord.emailFantaleghe,
     });
-    if (res.completed && res.historyRecorded && res.emailConfirmed && res.stato === 'COMPLETATO') {
+    if (res.stato) {
       setSubmittedRecord((prev) =>
-        prev && prev.id === submittedRecord.id
-          ? {
-              ...prev,
-              stato: 'COMPLETATO',
-              officialWhatsappLink: res.linkWhatsappUfficiale,
-            }
-          : prev
+        prev && prev.id === submittedRecord.id ? { ...prev, stato: res.stato! } : prev
       );
-      setEmailDispatchState('completed');
-      setEmailDispatchDetail(null);
-    } else if (
-      res.code === 'HISTORY_WRITE_FAILED' ||
-      res.status === 'HISTORY_WRITE_FAILED'
-    ) {
-      setSubmittedRecord((prev) =>
-        prev && prev.id === submittedRecord.id
-          ? {
-              ...prev,
-              stato: res.stato ?? prev.stato,
-              officialWhatsappLink: null,
-            }
-          : prev
-      );
-      setEmailDispatchState('history_failed');
-      setEmailDispatchDetail(res.detail ?? null);
-    } else if (res.manualCompleted || res.status === 'MANUAL_ADMIN_COMPLETED') {
-      setSubmittedRecord((prev) =>
-        prev && prev.id === submittedRecord.id
-          ? {
-              ...prev,
-              stato: res.stato ?? 'COMPLETATO',
-              officialWhatsappLink: null,
-            }
-          : prev
-      );
-      setEmailDispatchState('manual_completed');
-      setEmailDispatchDetail(res.detail ?? null);
-    } else if (!res.canRetry) {
-      setSubmittedRecord((prev) =>
-        prev && prev.id === submittedRecord.id
-          ? {
-              ...prev,
-              stato: res.stato ?? prev.stato,
-              officialWhatsappLink: null,
-            }
-          : prev
-      );
-      setEmailDispatchState('forbidden_state');
-      setEmailDispatchDetail(res.detail ?? null);
-    } else {
-      setSubmittedRecord((prev) =>
-        prev && prev.id === submittedRecord.id
-          ? {
-              ...prev,
-              stato: res.stato ?? prev.stato,
-              officialWhatsappLink: null,
-            }
-          : prev
-      );
-      setEmailDispatchState('failed_or_pending');
-      setEmailDispatchDetail(res.detail ?? null);
     }
+    setEmailDispatchState(res.outcome);
+    setEmailDispatchDetail(res.detail ?? null);
+    setCanRetryEmail(res.canRetry);
   };
 
   const handleDownloadRegolamentoPdf = () => {
@@ -873,10 +733,6 @@ export function RecruitmentWizard({
     } catch {
       // Ignore clipboard error
     }
-  };
-
-  const toggleChecklist = (index: number) => {
-    setCheckedTasks((prev) => prev.map((v, i) => (i === index ? !v : v)));
   };
 
   const canVisitStep = (targetStep: number): boolean => {
@@ -1628,68 +1484,23 @@ export function RecruitmentWizard({
                   </div>
                 ) : submittedRecord ? (
                   <div className="space-y-6">
-                    {submittedRecord.stato === 'COMPLETATO' && emailDispatchState === 'completed' ? (
-                      <div className="rounded-3xl bg-[#071436] text-white border border-[#D4AF37]/50 p-6 sm:p-7 space-y-5 shadow-[0_20px_50px_-16px_rgba(7,20,54,0.45)]">
-                        <div className="flex items-start gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
-                            <CheckCircle2 className="w-6 h-6" />
-                          </div>
-                          <div className="space-y-1.5">
-                            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FDE68A]">
-                              Email e storico confermati · Stato: COMPLETATO
-                            </p>
-                            <h1 className="font-display text-3xl sm:text-4xl font-black tracking-tight text-white">
-                              COMPLIMENTI 👏
-                            </h1>
-                            <p className="text-sm text-slate-200 leading-relaxed">
-                              La tua candidatura per <strong>{submittedRecord.nomeSquadra}</strong> è in stato <strong>COMPLETATO</strong> e non richiede ulteriori approvazioni manuali.
-                            </p>
-                          </div>
-                        </div>
-
-                        {submittedRecord.officialWhatsappLink ? (
-                          <a
-                            href={submittedRecord.officialWhatsappLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="min-h-[52px] w-full px-6 py-3.5 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2.5 shadow-[0_14px_30px_-10px_rgba(212,175,55,0.5)]"
-                          >
-                            <MessageCircle className="w-5 h-5" />
-                            <span>ENTRA NEL GRUPPO WHATSAPP UFFICIALE</span>
-                            <ExternalLink className="w-4 h-4" />
-                          </a>
-                        ) : (
-                          <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3.5 text-xs text-amber-100 leading-relaxed">
-                            Stato impostato su <strong>COMPLETATO</strong>. Il collegamento diretto al Gruppo WhatsApp Ufficiale non è ancora stato configurato nell&apos;Area Personale.
-                          </div>
-                        )}
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-11 h-11 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="w-6 h-6" />
                       </div>
-                    ) : (
-                      <div className="flex items-start gap-3">
-                        <div className="w-11 h-11 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
-                          <CheckCircle2 className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <p className="text-xs font-semibold text-emerald-700">
-                            Candidatura registrata su Cloud Firestore · Stato: {submittedRecord.stato}
-                          </p>
-                          <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                            {emailDispatchState === 'history_failed'
-                              ? 'COMPLETAMENTO IN ATTESA DI CONFERMA STORICO'
-                              : emailDispatchState === 'manual_completed'
-                                ? 'CANDIDATURA GESTITA MANUALMENTE DALLO STAFF'
-                                : 'LA TUA CANDIDATURA È STATA RICEVUTA!'}
-                          </h1>
-                          <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
-                            {emailDispatchState === 'history_failed'
-                              ? 'Le email sono state inviate, ma la registrazione nello storico operazioni non è ancora confermata dal server. Il completamento ufficiale e WhatsApp restano bloccati fino alla conferma.'
-                              : emailDispatchState === 'manual_completed'
-                                ? 'La pratica risulta completata manualmente dallo staff su Firestore. Verifica l’accesso WhatsApp ufficiale nella tua Area Personale.'
-                                : 'Il completamento automatico a COMPLETATO (con sblocco del Gruppo WhatsApp Ufficiale) si attiva esclusivamente dopo conferma reale dell’invio email e registrazione dello storico.'}
-                          </p>
-                        </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-emerald-700">
+                          Candidatura registrata · Stato attuale:{' '}
+                          <span className="font-mono-tabular font-bold">{submittedRecord.stato}</span>
+                        </p>
+                        <h1 className="font-display text-2xl font-extrabold text-[#0B1F4D]">
+                          Candidatura ricevuta correttamente
+                        </h1>
+                        <p className="text-sm text-slate-600 leading-relaxed">
+                          La tua richiesta è stata registrata in attesa di verifica manuale da parte dello Staff FICUP. Potrai seguire ogni aggiornamento dalla tua Area Personale.
+                        </p>
                       </div>
-                    )}
+                    </div>
 
                     <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 text-center space-y-2.5">
                       <p className="text-xs font-semibold text-slate-600">
@@ -1743,9 +1554,11 @@ export function RecruitmentWizard({
                       <p>
                         <strong>Squadra proposta:</strong> {submittedRecord.nomeSquadra}
                       </p>
-                      <p className="text-xs font-semibold text-emerald-700 pt-1">
-                        ✓ Verifica automatica completezza superata · Stato attuale:{' '}
-                        <span className="font-mono-tabular">{submittedRecord.stato}</span>
+                      <p className="text-xs font-semibold text-[#0B1F4D] pt-1">
+                        Stato attuale:{' '}
+                        <span className="font-mono-tabular">
+                          {submittedRecord.stato} · IN ATTESA DI VERIFICA STAFF
+                        </span>
                       </p>
                       <p className="text-xs font-mono-tabular text-slate-500">
                         Documenti accettati: Privacy v{config.versioneInformativa} · Regolamento v
@@ -1761,90 +1574,74 @@ export function RecruitmentWizard({
 
                     <div
                       className={`rounded-xl border p-4 text-xs leading-relaxed space-y-2.5 ${
-                        emailDispatchState === 'completed'
+                        emailDispatchState === 'emails_confirmed'
                           ? 'border-emerald-200 bg-emerald-50/70 text-emerald-950'
                           : emailDispatchState === 'sending'
                             ? 'border-sky-200 bg-sky-50/70 text-[#0B1F4D]'
-                            : emailDispatchState === 'manual_completed'
-                              ? 'border-sky-200 bg-sky-50/70 text-[#0B1F4D]'
-                              : emailDispatchState === 'history_failed'
-                                ? 'border-red-200 bg-red-50/70 text-red-950'
-                                : 'border-amber-200 bg-amber-50/70 text-amber-950'
+                            : 'border-amber-200 bg-amber-50/70 text-amber-950'
                       }`}
                     >
                       <div className="flex items-start gap-2.5">
                         {emailDispatchState === 'sending' ? (
                           <Loader2 className="w-4 h-4 animate-spin text-[#0284C7] shrink-0 mt-0.5" />
-                        ) : emailDispatchState === 'completed' ? (
+                        ) : emailDispatchState === 'emails_confirmed' ? (
                           <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                         ) : (
-                          <AlertCircle
-                            className={`w-4 h-4 shrink-0 mt-0.5 ${
-                              emailDispatchState === 'history_failed'
-                                ? 'text-red-700'
-                                : emailDispatchState === 'manual_completed'
-                                  ? 'text-[#0284C7]'
-                                  : 'text-[#C69214]'
-                            }`}
-                          />
+                          <AlertCircle className="w-4 h-4 text-[#C69214] shrink-0 mt-0.5" />
                         )}
                         <div className="space-y-1">
                           <p>
-                            <strong>Comunicazioni email e completamento:</strong>{' '}
+                            <strong>Notifica email di ricezione:</strong>{' '}
                             {emailDispatchState === 'unconfigured' ? (
                               <>
-                                l&apos;endpoint Google Apps Script non è collegato in questo ambiente (<span className="font-mono-tabular">VITE_APPS_SCRIPT_WEBAPP_URL</span>). Lo stato resta su <strong className="font-mono-tabular">NUOVO</strong> fino all&apos;elaborazione del backend.
+                                candidatura salvata su Firestore (stato{' '}
+                                <strong className="font-mono-tabular">NUOVO</strong>). Il servizio email automatico non è collegato in questo ambiente (<span className="font-mono-tabular">VITE_APPS_SCRIPT_WEBAPP_URL</span>).
                               </>
                             ) : emailDispatchState === 'sending' ? (
                               <>
-                                invio email, verifica conferma e registrazione storico in corso verso{' '}
+                                invio della conferma di ricezione verso{' '}
                                 <span className="font-mono-tabular text-[#0B1F4D]">
                                   {submittedRecord.emailFantaleghe}
                                 </span>{' '}
-                                e lo staff (<span className="font-mono-tabular">{config.emailOperativa}</span>)...
+                                e avviso allo Staff (<span className="font-mono-tabular">{config.emailOperativa}</span>) in corso...
                               </>
-                            ) : emailDispatchState === 'completed' ? (
+                            ) : emailDispatchState === 'emails_confirmed' ? (
                               <>
-                                invio email e registrazione nello storico operazioni confermati dal backend verso{' '}
+                                email di conferma ricezione inviata a{' '}
                                 <span className="font-mono-tabular text-[#0B1F4D]">
                                   {submittedRecord.emailFantaleghe}
                                 </span>{' '}
-                                e lo staff (<span className="font-mono-tabular">{config.emailOperativa}</span>). Controlla anche Spam o Promozioni. Stato aggiornato automaticamente a <strong className="font-mono-tabular">COMPLETATO</strong>.
+                                e notifica recapitata allo Staff (<span className="font-mono-tabular">{config.emailOperativa}</span>). Controlla anche Spam o Promozioni.
                               </>
-                            ) : emailDispatchState === 'history_failed' ? (
+                            ) : emailDispatchState === 'emails_pending' ? (
                               <>
-                                candidatura salvata su Firestore e email confermate, ma la registrazione nello storico operazioni non è andata a buon fine ({emailDispatchDetail || 'HISTORY_WRITE_FAILED'}). Il completamento definitivo e l&apos;accesso WhatsApp restano momentaneamente bloccati: riprova ora senza creare duplicati.
-                              </>
-                            ) : emailDispatchState === 'manual_completed' ? (
-                              <>
-                                la candidatura risulta già gestita e impostata manualmente su <strong className="font-mono-tabular">{submittedRecord.stato}</strong> dallo staff. Controlla lo stato e l&apos;eventuale accesso WhatsApp nell&apos;Area Personale.
+                                candidatura salvata su Firestore (stato{' '}
+                                <strong className="font-mono-tabular">{submittedRecord.stato}</strong>), email di ricezione ancora in elaborazione.
+                                {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
                               </>
                             ) : emailDispatchState === 'forbidden_state' ? (
                               <>
-                                completamento automatico non applicabile allo stato corrente (<strong className="font-mono-tabular">{submittedRecord.stato}</strong>).{emailDispatchDetail ? ` (${emailDispatchDetail})` : ''} Verifica nella tua Area Personale.
+                                notifica iniziale non necessaria per lo stato corrente (<strong className="font-mono-tabular">{submittedRecord.stato}</strong>).{emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
                               </>
                             ) : (
                               <>
-                                la candidatura è salvata su Firestore (stato attuale:{' '}
-                                <strong className="font-mono-tabular">{submittedRecord.stato}</strong>), ma il completamento automatico (email + storico) non è ancora stato confermato dal backend Apps Script.
+                                candidatura salvata su Firestore (stato{' '}
+                                <strong className="font-mono-tabular">{submittedRecord.stato}</strong>), si è verificato un errore temporaneo durante l&apos;invio dell&apos;email di ricezione.
                                 {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
                               </>
                             )}
                           </p>
-                          {(emailDispatchState === 'failed_or_pending' ||
-                            emailDispatchState === 'history_failed') &&
+                          {canRetryEmail &&
+                            (emailDispatchState === 'emails_pending' ||
+                              emailDispatchState === 'notification_error') &&
                             isAppsScriptConfigured && (
                               <button
                                 type="button"
-                                onClick={handleRetryEmailCompletion}
+                                onClick={handleRetryEmailNotification}
                                 className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
                               >
                                 <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-                                <span>
-                                  {emailDispatchState === 'history_failed'
-                                    ? 'Riprova registrazione storico e completamento'
-                                    : 'Riprova verifica email e completamento'}
-                                </span>
+                                <span>Riprova invio email di ricezione</span>
                               </button>
                             )}
                         </div>
@@ -1866,13 +1663,13 @@ export function RecruitmentWizard({
                   <div className="space-y-6">
                     <div>
                       <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                        Passaggio 5 · Verifica finale prima dell&apos;invio
+                        Passaggio 5 · Riepilogo e invio
                       </p>
                       <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                        Riepilogo candidatura e accettazioni
+                        Controlla i tuoi dati prima dell&apos;invio
                       </h1>
-                      <p className="mt-1.5 text-sm text-slate-600">
-                        Controlla i tuoi dati Fantaleghe e le dichiarazioni accettate prima di confermare l&apos;invio definitivo.
+                      <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                        La tua candidatura è pronta per essere inviata. Dopo la registrazione, il nostro Staff verificherà i dati e ti comunicherà l&apos;esito.
                       </p>
                     </div>
 
@@ -1883,43 +1680,53 @@ export function RecruitmentWizard({
                       </div>
                     )}
 
-                    <div className="rounded-xl border border-slate-200 divide-y divide-slate-200 bg-slate-50/70">
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Fantallenatore</span>
-                        <span className="text-sm font-semibold text-[#0B1F4D]">
+                    <div className="rounded-2xl border border-slate-200 divide-y divide-slate-200 bg-white overflow-hidden">
+                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Dati del candidato
+                        </span>
+                        <span className="text-sm font-bold text-[#0B1F4D]">
                           {nome.trim()} {cognome.trim()}
                         </span>
                       </div>
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Email Fantaleghe</span>
+                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Email Fantaleghe
+                        </span>
                         <span className="text-sm font-semibold text-[#0284C7] break-all">
                           {emailFantaleghe.trim().toLowerCase()}
                         </span>
                       </div>
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">
-                          Numero di cellulare
+                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Cellulare
                         </span>
                         <span className="text-sm font-semibold font-mono-tabular text-[#0B1F4D]">
                           {cellulare.trim()}
                         </span>
                       </div>
-                      <div className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-                        <span className="text-xs font-medium text-slate-500">Squadra proposta</span>
-                        <span className="text-sm font-semibold text-[#0B1F4D]">
+                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Squadra proposta
+                        </span>
+                        <span className="text-sm font-bold text-[#0B1F4D]">
                           {nomeSquadra.trim()}
                         </span>
                       </div>
                       {note.trim() && (
-                        <div className="p-3.5 sm:px-4 flex flex-col gap-1">
-                          <span className="text-xs font-medium text-slate-500">Note facoltative</span>
+                        <div className="p-4 sm:px-5 flex flex-col gap-1 bg-slate-50/50">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                            Note
+                          </span>
                           <span className="text-sm text-slate-700 whitespace-pre-wrap">
                             {note.trim()}
                           </span>
                         </div>
                       )}
-                      <div className="p-3.5 sm:px-4 space-y-1 text-xs">
-                        <p className="font-medium text-slate-500">Documenti obbligatori accettati</p>
+                      <div className="p-4 sm:px-5 space-y-1.5 bg-slate-50/70 text-xs">
+                        <p className="font-semibold uppercase tracking-wider text-slate-500">
+                          Consensi documentali
+                        </p>
                         <p className="font-semibold text-emerald-700">
                           ✓ Informativa Privacy GDPR (v{config.versioneInformativa})
                         </p>
@@ -1930,6 +1737,13 @@ export function RecruitmentWizard({
                           ✓ Regole Chat WhatsApp Ufficiale (v{chatRulesVersionLabel})
                         </p>
                       </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex items-start gap-3 text-xs sm:text-sm text-slate-700">
+                      <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+                      <p className="leading-relaxed">
+                        La candidatura verrà salvata in stato <strong className="font-mono-tabular text-[#0B1F4D]">NUOVO</strong>. L&apos;approvazione e il completamento avvengono esclusivamente dopo verifica manuale dello Staff FICUP.
+                      </p>
                     </div>
 
                     <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
@@ -1943,9 +1757,9 @@ export function RecruitmentWizard({
                       <button
                         type="button"
                         onClick={handleRealSubmit}
-                        className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                        className="min-h-[48px] px-7 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-extrabold tracking-wide hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <span>Invia candidatura ufficiale</span>
+                        <span>INVIA CANDIDATURA</span>
                         <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
                       </button>
                     </div>
@@ -1954,7 +1768,7 @@ export function RecruitmentWizard({
               </motion.div>
             )}
 
-            {/* STEP 6 — PROSSIMI PASSAGGI & ACCESSO AREA PERSONALE */}
+            {/* STEP 6 — CONFERMA E PROSSIMI PASSAGGI */}
             {step === 6 && (
               <RecruitmentStep6
                 config={config}
@@ -1962,9 +1776,8 @@ export function RecruitmentWizard({
                 emailDispatchState={emailDispatchState}
                 emailDispatchDetail={emailDispatchDetail}
                 isAppsScriptReady={isAppsScriptConfigured}
-                checkedTasks={checkedTasks}
-                onToggleChecklist={toggleChecklist}
-                onRetryEmailCompletion={handleRetryEmailCompletion}
+                canRetryEmail={canRetryEmail}
+                onRetryEmailNotification={handleRetryEmailNotification}
                 onExitToHome={onExitToHome}
                 onOpenWaitingRoom={onOpenWaitingRoom}
               />
