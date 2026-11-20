@@ -890,10 +890,10 @@ export function WaitingRoom({
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
                   {canAccessProvisionalWa
-                    ? `Canale per coordinarti con lo staff durante la verifica. Indica il tuo codice ${activeCode} in chat.`
+                    ? `Canale facoltativo di supporto community. Indica il tuo codice ${activeCode} se scrivi in chat.`
                     : realState === 'RESPINTO'
                       ? 'Non disponibile per candidature non accolte.'
-                      : 'Si sblocca dopo l’invio o la verifica della tua candidatura.'}
+                      : 'Si sblocca dopo l’invio della tua candidatura.'}
                 </p>
                 {canAccessProvisionalWa ? (
                   <a

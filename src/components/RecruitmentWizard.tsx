@@ -75,18 +75,286 @@ const PENDING_COMPLETION_TASKS = [
   'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
   'Completa il login o la registrazione su Fantaleghe e accedi a FICUP.',
   'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
-  'Avvisa lo staff sul gruppo WhatsApp provvisorio indicando il tuo codice FICUP26 se hai bisogno di supporto.',
-  'Al completamento confermato (stato COMPLETATO), accedi al Gruppo WhatsApp Ufficiale dal pulsante dedicato o dall’Area Personale.',
+  'Se hai bisogno di assistenza, utilizza il gruppo WhatsApp provvisorio indicando il tuo codice FICUP26.',
+  'Al completamento automatico confermato (stato COMPLETATO con storico registrato), accedi al Gruppo WhatsApp Ufficiale dal pulsante dedicato o dall’Area Personale.',
 ];
 
 const CONFIRMED_COMPLETION_TASKS = [
-  'Stato candidatura confermato su COMPLETATO e consultabile in qualsiasi momento nella tua Area Personale.',
+  'Stato candidatura confermato su COMPLETATO con storico operazioni registrato e consultabile nella tua Area Personale.',
   'Apri il link di invito ufficiale ricevuto via email da Fantaleghe (controlla anche Spam).',
   'Completa il login o la registrazione su Fantaleghe e accedi a FICUP.',
   'Personalizza la rosa con il budget iniziale e imposta il nome del tuo club.',
-  'Utilizza il tuo codice FICUP26 per eventuali comunicazioni di supporto con lo staff.',
+  'Utilizza il tuo codice FICUP26 in caso di richieste di supporto tecnico.',
   'Accedi direttamente al Gruppo WhatsApp Ufficiale dal pulsante qui sopra o dalla tua Area Personale.',
 ];
+
+export type WizardEmailDispatchState =
+  | 'idle'
+  | 'sending'
+  | 'completed'
+  | 'history_failed'
+  | 'manual_completed'
+  | 'forbidden_state'
+  | 'failed_or_pending'
+  | 'unconfigured';
+
+export interface SubmittedWizardRecord {
+  id: string;
+  codiceCandidatura: string;
+  emailFantaleghe: string;
+  cellulare: string;
+  nomeSquadra: string;
+  nomeCompleto: string;
+  submittedAtIso: string;
+  stato: CandidaturaStato;
+  officialWhatsappLink: string | null;
+}
+
+export interface RecruitmentStep6Props {
+  config: Pick<
+    Omit<ConfigurazionePublica, 'updatedAt' | 'updatedBy'>,
+    'linkWhatsappProvvisorio' | 'emailOperativa'
+  >;
+  submittedRecord: SubmittedWizardRecord | null;
+  emailDispatchState: WizardEmailDispatchState;
+  emailDispatchDetail: string | null;
+  isAppsScriptReady: boolean;
+  checkedTasks: boolean[];
+  onToggleChecklist: (index: number) => void;
+  onRetryEmailCompletion: () => void;
+  onExitToHome: () => void;
+  onOpenWaitingRoom?: () => void;
+}
+
+export function RecruitmentStep6({
+  config,
+  submittedRecord,
+  emailDispatchState,
+  emailDispatchDetail,
+  isAppsScriptReady,
+  checkedTasks,
+  onToggleChecklist,
+  onRetryEmailCompletion,
+  onExitToHome,
+  onOpenWaitingRoom,
+}: RecruitmentStep6Props) {
+  const isAutoCompletedConfirmed = Boolean(
+    submittedRecord?.stato === 'COMPLETATO' && emailDispatchState === 'completed'
+  );
+  const codiceCandidatura = submittedRecord?.codiceCandidatura ?? 'FICUP26';
+  const checklistItems = isAutoCompletedConfirmed
+    ? CONFIRMED_COMPLETION_TASKS
+    : PENDING_COMPLETION_TASKS;
+
+  return (
+    <motion.div
+      key="step-6"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.2 }}
+      className="space-y-6"
+    >
+      <div>
+        <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
+          Passaggio 6 · Prossimi passaggi e Area Personale
+        </p>
+        <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
+          Prossimi passaggi verso la lega
+        </h1>
+        <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+          {isAutoCompletedConfirmed
+            ? `La tua candidatura (${codiceCandidatura}) è in stato COMPLETATO con email e storico operazioni registrati. Puoi accedere subito al Gruppo WhatsApp Ufficiale e consultarla nell’Area Personale.`
+            : emailDispatchState === 'sending'
+              ? `Completamento automatico della candidatura (${codiceCandidatura}) in corso: il backend sta confermando l’invio delle email e la registrazione nello storico operazioni.`
+              : emailDispatchState === 'history_failed'
+                ? `La candidatura (${codiceCandidatura}) e le email sono state elaborate, ma la registrazione nello storico operazioni non è ancora confermata dal backend. Completa il nuovo tentativo qui sotto o verifica nella tua Area Personale.`
+                : emailDispatchState === 'manual_completed'
+                  ? `La candidatura (${codiceCandidatura}) risulta già impostata su ${submittedRecord?.stato ?? 'COMPLETATO'}. Controlla stato e dettagli aggiornati nella tua Area Personale.`
+                  : `La candidatura (${codiceCandidatura}) è registrata su Firestore (stato ${submittedRecord?.stato ?? 'NUOVO'}). Monitora il completamento automatico nella tua Area Personale e usa il gruppo provvisorio per eventuale supporto.`}
+        </p>
+      </div>
+
+      {isAutoCompletedConfirmed ? (
+        <div className="rounded-3xl bg-[#071436] text-white border border-[#D4AF37]/50 p-5 sm:p-6 space-y-4">
+          <div className="space-y-1">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FDE68A]">
+              Stato COMPLETATO e storico confermati
+            </p>
+            <h2 className="font-display text-2xl sm:text-3xl font-black text-white">
+              COMPLIMENTI 👏
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
+              Invio email e registrazione nello storico operazioni confermati automaticamente dal sistema. Accedi subito al Gruppo WhatsApp Ufficiale qui sotto.
+            </p>
+          </div>
+          {submittedRecord?.officialWhatsappLink ? (
+            <a
+              href={submittedRecord.officialWhatsappLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-h-[50px] w-full px-5 py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 transition-all inline-flex items-center justify-center gap-2"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>ENTRA NEL GRUPPO WHATSAPP UFFICIALE</span>
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          ) : (
+            <p className="text-xs text-amber-200">
+              Il link del Gruppo WhatsApp Ufficiale sarà disponibile nella tua Area Personale non appena configurato per la stagione corrente.
+            </p>
+          )}
+        </div>
+      ) : emailDispatchState === 'sending' ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-[#0B1F4D]">
+          <Loader2 className="w-5 h-5 animate-spin text-[#0284C7] shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong>Completamento automatico in corso:</strong> stiamo attendendo la conferma delle email e la registrazione obbligatoria nello storico operazioni. Il collegamento al Gruppo WhatsApp Ufficiale resta protetto fino alla conferma del backend.
+          </p>
+        </div>
+      ) : emailDispatchState === 'history_failed' ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50/80 p-4 sm:p-5 space-y-3 text-xs sm:text-sm text-red-950">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold">
+                Storico operazioni non ancora confermato ({emailDispatchDetail || 'HISTORY_WRITE_FAILED'})
+              </p>
+              <p className="leading-relaxed">
+                <strong>Gruppo WhatsApp Ufficiale protetto:</strong> le email sono state elaborate, ma senza la registrazione confermata in <span className="font-mono-tabular font-semibold">storico_operazioni</span> il completamento definitivo e l&apos;accesso al gruppo ufficiale restano bloccati. Riprova in sicurezza senza creare duplicati.
+              </p>
+            </div>
+          </div>
+          {isAppsScriptReady && (
+            <button
+              type="button"
+              onClick={onRetryEmailCompletion}
+              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
+              <span>Riprova registrazione storico e completamento</span>
+            </button>
+          )}
+        </div>
+      ) : emailDispatchState === 'manual_completed' ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-[#0B1F4D]">
+          <ShieldCheck className="w-5 h-5 text-[#0284C7] shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong>Gruppo WhatsApp Ufficiale protetto:</strong> la candidatura risulta già gestita direttamente sullo stato <span className="font-mono-tabular font-bold">{submittedRecord?.stato ?? 'COMPLETATO'}</span>. Verifica nella tua Area Personale l&apos;eventuale accesso WhatsApp abilitato.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 sm:p-5 space-y-3 text-xs sm:text-sm text-amber-950">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
+            <p className="leading-relaxed">
+              <strong>Gruppo WhatsApp Ufficiale protetto:</strong> per sicurezza il collegamento ufficiale resta bloccato e si sblocca esclusivamente quando il backend conferma lo stato <span className="font-mono-tabular font-bold">COMPLETATO</span> insieme all&apos;invio email e alla registrazione nello storico operazioni.
+              {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
+            </p>
+          </div>
+          {emailDispatchState === 'failed_or_pending' && isAppsScriptReady && (
+            <button
+              type="button"
+              onClick={onRetryEmailCompletion}
+              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
+              <span>Riprova verifica email e completamento</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Provisional WhatsApp Group (Supporto) */}
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-3">
+        <div className="flex items-center gap-2 text-emerald-900">
+          <MessageCircle className="w-5 h-5 text-emerald-700" />
+          <h2 className="font-display text-base font-bold">
+            Gruppo WhatsApp Provvisorio (Supporto)
+          </h2>
+        </div>
+        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+          {isAutoCompletedConfirmed
+            ? 'Canale facoltativo di supporto community se hai bisogno di assistenza prima di iniziare in lega. Indica il tuo codice '
+            : 'Canale facoltativo di supporto community per assistenza tecnica prima del completamento automatico. Indica il tuo codice '}
+          <strong className="font-mono-tabular text-[#0B1F4D]">{codiceCandidatura}</strong>{' '}
+          quando scrivi in chat.
+        </p>
+        <a
+          href={config.linkWhatsappProvvisorio}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-h-[48px] w-full px-5 py-3 rounded-xl bg-emerald-700 text-white text-sm font-bold hover:bg-emerald-800 transition-colors inline-flex items-center justify-center gap-2"
+        >
+          <MessageCircle className="w-4 h-4" />
+          <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
+          <ExternalLink className="w-4 h-4 opacity-80" />
+        </a>
+      </div>
+
+      {/* Completion Checklist */}
+      <div className="space-y-2.5">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Promemoria percorso di ingresso
+        </p>
+        {checklistItems.map((task, idx) => {
+          const checked = checkedTasks[idx] ?? false;
+          return (
+            <label
+              key={task}
+              className={`flex items-start gap-3 p-3.5 rounded-xl border transition-colors cursor-pointer ${
+                checked
+                  ? 'bg-emerald-50/70 border-emerald-200 text-slate-900'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100/70'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggleChecklist(idx)}
+                className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
+              />
+              <span className="text-xs sm:text-sm leading-snug">
+                <strong className="font-mono-tabular text-[#0B1F4D] mr-1.5">{idx + 1}.</strong>
+                {task}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex items-start gap-2.5 text-xs text-slate-600">
+        <Mail className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
+        <span>
+          Assistenza operativa:{' '}
+          <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
+            {config.emailOperativa}
+          </span>
+        </span>
+      </div>
+
+      <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
+        <button
+          type="button"
+          onClick={onExitToHome}
+          className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-[#0B1F4D] text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+        >
+          Torna alla homepage
+        </button>
+        {onOpenWaitingRoom && (
+          <button
+            type="button"
+            onClick={onOpenWaitingRoom}
+            className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <DoorOpen className="w-4 h-4 text-[#D4AF37]" />
+            <span>APRI AREA PERSONALE</span>
+          </button>
+        )}
+      </div>
+    </motion.div>
+  );
+}
 
 export function RecruitmentWizard({
   config,
@@ -129,27 +397,8 @@ export function RecruitmentWizard({
   const [submitStage, setSubmitStage] = useState<'verifying' | 'saving'>('verifying');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [acceptSyncWarning, setAcceptSyncWarning] = useState<string | null>(null);
-  const [submittedRecord, setSubmittedRecord] = useState<{
-    id: string;
-    codiceCandidatura: string;
-    emailFantaleghe: string;
-    cellulare: string;
-    nomeSquadra: string;
-    nomeCompleto: string;
-    submittedAtIso: string;
-    stato: CandidaturaStato;
-    officialWhatsappLink: string | null;
-  } | null>(null);
-  const [emailDispatchState, setEmailDispatchState] = useState<
-    | 'idle'
-    | 'sending'
-    | 'completed'
-    | 'history_failed'
-    | 'manual_completed'
-    | 'forbidden_state'
-    | 'failed_or_pending'
-    | 'unconfigured'
-  >('idle');
+  const [submittedRecord, setSubmittedRecord] = useState<SubmittedWizardRecord | null>(null);
+  const [emailDispatchState, setEmailDispatchState] = useState<WizardEmailDispatchState>('idle');
   const [emailDispatchDetail, setEmailDispatchDetail] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
@@ -1707,160 +1956,18 @@ export function RecruitmentWizard({
 
             {/* STEP 6 — PROSSIMI PASSAGGI & ACCESSO AREA PERSONALE */}
             {step === 6 && (
-              <motion.div
-                key="step-6"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Passaggio 6 · Coordinamento e Area Personale
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Prossimi passaggi verso la lega
-                  </h1>
-                  <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
-                    {submittedRecord?.stato === 'COMPLETATO' && emailDispatchState === 'completed'
-                      ? `La tua candidatura (${submittedRecord.codiceCandidatura}) è già in stato COMPLETATO. Puoi monitorarla nell’Area Personale e accedere subito al Gruppo WhatsApp Ufficiale.`
-                      : `Mentre completi la pratica (${submittedRecord?.codiceCandidatura ?? 'FICUP26'}), puoi coordinarti nel gruppo WhatsApp provvisorio e monitorare lo stato in tempo reale nella tua Area Personale.`}
-                  </p>
-                </div>
-
-                {/* Provisional WhatsApp Group */}
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-3">
-                  <div className="flex items-center gap-2 text-emerald-900">
-                    <MessageCircle className="w-5 h-5 text-emerald-700" />
-                    <h2 className="font-display text-base font-bold">
-                      Gruppo WhatsApp Provvisorio (Accoglienza)
-                    </h2>
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                    Serve per coordinarti con lo staff durante la verifica. Indica il tuo codice{' '}
-                    <strong className="font-mono-tabular text-[#0B1F4D]">
-                      {submittedRecord?.codiceCandidatura}
-                    </strong>{' '}
-                    quando scrivi in chat.
-                  </p>
-                  <a
-                    href={config.linkWhatsappProvvisorio}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[48px] w-full px-5 py-3 rounded-xl bg-emerald-700 text-white text-sm font-bold hover:bg-emerald-800 transition-colors inline-flex items-center justify-center gap-2"
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
-                    <ExternalLink className="w-4 h-4 opacity-80" />
-                  </a>
-                </div>
-
-                {submittedRecord?.stato === 'COMPLETATO' && emailDispatchState === 'completed' ? (
-                  <div className="rounded-3xl bg-[#071436] text-white border border-[#D4AF37]/50 p-5 sm:p-6 space-y-4">
-                    <div className="space-y-1">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#FDE68A]">
-                        Stato COMPLETATO confermato
-                      </p>
-                      <h2 className="font-display text-2xl sm:text-3xl font-black text-white">
-                        COMPLIMENTI 👏
-                      </h2>
-                      <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-                        Il tuo ingresso è confermato automaticamente senza attesa di ulteriore approvazione. Accedi subito al Gruppo WhatsApp Ufficiale qui sotto.
-                      </p>
-                    </div>
-                    {submittedRecord.officialWhatsappLink ? (
-                      <a
-                        href={submittedRecord.officialWhatsappLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="min-h-[50px] w-full px-5 py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 transition-all inline-flex items-center justify-center gap-2"
-                      >
-                        <MessageCircle className="w-4 h-4" />
-                        <span>ENTRA NEL GRUPPO WHATSAPP UFFICIALE</span>
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    ) : (
-                      <p className="text-xs text-amber-200">
-                        Il link del Gruppo WhatsApp Ufficiale si renderà disponibile nella tua Area Personale non appena configurato dallo staff.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-amber-950">
-                    <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
-                    <p className="leading-relaxed">
-                      <strong>Gruppo WhatsApp Ufficiale:</strong> per sicurezza il collegamento ufficiale resta protetto e si sblocca esclusivamente quando lo stato risulta <span className="font-mono-tabular font-bold">COMPLETATO</span> con conferma di invio email e registrazione nello storico operazioni.
-                    </p>
-                  </div>
-                )}
-
-                {/* Completion Checklist */}
-                <div className="space-y-2.5">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Promemoria percorso di ingresso
-                  </p>
-                  {(submittedRecord?.stato === 'COMPLETATO' && emailDispatchState === 'completed'
-                    ? CONFIRMED_COMPLETION_TASKS
-                    : PENDING_COMPLETION_TASKS
-                  ).map((task, idx) => {
-                    const checked = checkedTasks[idx];
-                    return (
-                      <label
-                        key={task}
-                        className={`flex items-start gap-3 p-3.5 rounded-xl border transition-colors cursor-pointer ${
-                          checked
-                            ? 'bg-emerald-50/70 border-emerald-200 text-slate-900'
-                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100/70'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleChecklist(idx)}
-                          className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
-                        />
-                        <span className="text-xs sm:text-sm leading-snug">
-                          <strong className="font-mono-tabular text-[#0B1F4D] mr-1.5">
-                            {idx + 1}.
-                          </strong>
-                          {task}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex items-start gap-2.5 text-xs text-slate-600">
-                  <Mail className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
-                  <span>
-                    Assistenza operativa:{' '}
-                    <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
-                      {config.emailOperativa}
-                    </span>
-                  </span>
-                </div>
-
-                <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={onExitToHome}
-                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-[#0B1F4D] text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    Torna alla homepage
-                  </button>
-                  {onOpenWaitingRoom && (
-                    <button
-                      type="button"
-                      onClick={onOpenWaitingRoom}
-                      className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <DoorOpen className="w-4 h-4 text-[#D4AF37]" />
-                      <span>APRI AREA PERSONALE</span>
-                    </button>
-                  )}
-                </div>
-              </motion.div>
+              <RecruitmentStep6
+                config={config}
+                submittedRecord={submittedRecord}
+                emailDispatchState={emailDispatchState}
+                emailDispatchDetail={emailDispatchDetail}
+                isAppsScriptReady={isAppsScriptConfigured}
+                checkedTasks={checkedTasks}
+                onToggleChecklist={toggleChecklist}
+                onRetryEmailCompletion={handleRetryEmailCompletion}
+                onExitToHome={onExitToHome}
+                onOpenWaitingRoom={onOpenWaitingRoom}
+              />
             )}
           </AnimatePresence>
         </div>
