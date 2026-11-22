@@ -18,11 +18,12 @@ import {
   Users,
 } from 'lucide-react';
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import editorialStadiumImg from '../assets/images/ficup_editorial_stadium_1794899930151.jpg';
 import stadiumHeroImg from '../assets/images/ficup_stadium_hero_1794862341799.jpg';
 import tacticalArenaImg from '../assets/images/ficup_tactical_arena_1794895608683.jpg';
 import virtualUniverseImg from '../assets/images/ficup_virtual_universe_1795121886770.jpg';
+import heroArbitroFirstFrame from '../assets/images/hero_arbitro_first_frame.jpg';
 import type { FirebaseEnvironmentDiagnostics } from '../lib/firebase';
 import type { ConfigurazionePublica } from '../lib/firestore';
 import { FicupLogo } from './FicupLogo';
@@ -243,13 +244,30 @@ export function HomePage({
   const [universeImgFailed, setUniverseImgFailed] = useState(false);
   const [officialAppLogoFailed, setOfficialAppLogoFailed] = useState(false);
   const [appScreenshotFailed, setAppScreenshotFailed] = useState(false);
-  const [heroFischiettoFailed, setHeroFischiettoFailed] = useState(false);
   const [heroVideoFailed, setHeroVideoFailed] = useState(false);
+  const [heroVideoReady, setHeroVideoReady] = useState(false);
   const [fischiettoImgFailed, setFischiettoImgFailed] = useState(false);
   const [failedCompetitionLogos, setFailedCompetitionLogos] = useState<Record<string, boolean>>({});
   const prefersReducedMotion = useReducedMotion();
 
   const heroContainerRef = useRef<HTMLElement | null>(null);
+  const heroVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const revealHeroVideoOnce = useCallback(() => {
+    setHeroVideoReady((alreadyReady) => (alreadyReady ? alreadyReady : true));
+  }, []);
+
+  useEffect(() => {
+    const videoEl = heroVideoRef.current;
+    if (!videoEl || heroVideoFailed) {
+      return;
+    }
+    // Gestisce il caso in cui il browser abbia già in cache il primo frame prima del mount React
+    if (videoEl.readyState >= 2) {
+      revealHeroVideoOnce();
+      videoEl.play().catch(() => undefined);
+    }
+  }, [heroVideoFailed, revealHeroVideoOnce]);
   const { scrollYProgress } = useScroll({
     target: heroContainerRef,
     offset: ['start start', 'end start'],
@@ -330,44 +348,62 @@ export function HomePage({
               NON È SOLTANTO FANTACALCIO. È UNA PASSIONE CHE UNISCE L&apos;ITALIA.
             </motion.h1>
 
-            {/* Right: Attached Animated Video asset strictly to the RIGHT of the Hero Title on Mobile and Desktop */}
-            <motion.div
-              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 6 }}
-              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-              transition={
-                prefersReducedMotion
-                  ? { duration: 0.3 }
-                  : { duration: 1.8, delay: 0.2, ease: [0.22, 1, 0.36, 1] }
-              }
-              className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center"
-            >
-              {!heroVideoFailed ? (
-                <video
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  preload="auto"
-                  poster={HERO_FISCHIETTO_URL}
-                  onError={() => setHeroVideoFailed(true)}
-                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none bg-transparent"
-                >
-                  <source
-                    src={`${import.meta.env.BASE_URL}assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4`}
-                    type="video/mp4"
-                  />
-                  Il tuo browser non supporta il tag video.
-                </video>
-              ) : (
+            {/* Right: Original Arbitro Video beside Hero Title — locked 9:16 dimensions upfront, zero layout shift, one-shot opacity fade */}
+            <div className="col-span-5 md:col-span-5 md:col-start-8 md:row-start-1 md:row-span-3 min-w-0 flex items-center justify-end self-center">
+              <div className="relative w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] aspect-[9/16] rounded-2xl overflow-hidden bg-white shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none">
                 <img
-                  src={HERO_FISCHIETTO_URL}
+                  src={heroArbitroFirstFrame}
                   alt="Il Fischietto FICUP"
+                  width={720}
+                  height={1280}
                   loading="eager"
-                  referrerPolicy="no-referrer"
-                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none"
+                  decoding="sync"
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    if (img.src !== HERO_FISCHIETTO_URL) {
+                      img.src = HERO_FISCHIETTO_URL;
+                    }
+                  }}
+                  aria-hidden={!heroVideoFailed && heroVideoReady}
+                  className="absolute inset-0 w-full h-full object-cover object-center select-none pointer-events-none"
                 />
-              )}
-            </motion.div>
+
+                {!heroVideoFailed && (
+                  <video
+                    ref={heroVideoRef}
+                    width={720}
+                    height={1280}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    preload="auto"
+                    onLoadedMetadata={(e) => {
+                      if (e.currentTarget.readyState >= 2) {
+                        revealHeroVideoOnce();
+                      }
+                    }}
+                    onLoadedData={() => {
+                      revealHeroVideoOnce();
+                    }}
+                    onCanPlay={(e) => {
+                      revealHeroVideoOnce();
+                      e.currentTarget.play().catch(() => undefined);
+                    }}
+                    onError={() => setHeroVideoFailed(true)}
+                    className={`absolute inset-0 w-full h-full object-cover object-center select-none bg-transparent transition-opacity ease-out ${
+                      prefersReducedMotion ? 'duration-0' : 'duration-500'
+                    } ${heroVideoReady ? 'opacity-100' : 'opacity-0'}`}
+                  >
+                    <source
+                      src={`${import.meta.env.BASE_URL}assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4`}
+                      type="video/mp4"
+                    />
+                    Il tuo browser non supporta il tag video.
+                  </video>
+                )}
+              </div>
+            </div>
 
             {/* Description + CTAs (Full width on mobile below Title+Image row; Left column on desktop) */}
             <div className="col-span-12 md:col-span-7 md:col-start-1 md:row-start-3 min-w-0 space-y-5 sm:space-y-6">
