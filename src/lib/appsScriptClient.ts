@@ -48,7 +48,7 @@ interface AppsScriptApiResponse<T> {
   };
 }
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 30000;
 
 function sanitizeHttpsWhatsappUrl(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -68,9 +68,11 @@ async function postToAppsScript<T>(payload: Record<string, unknown>): Promise<Ap
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+  let rawText = '';
+  let response: Response;
+
   try {
-    // Content-Type text/plain evita il preflight OPTIONS non supportato da Google Apps Script Web App
-    const response = await fetch(APPS_SCRIPT_URL, {
+    response = await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain;charset=utf-8',
@@ -79,35 +81,73 @@ async function postToAppsScript<T>(payload: Record<string, unknown>): Promise<Ap
       signal: controller.signal,
     });
 
-    const rawText = await response.text();
-    let parsed: AppsScriptApiResponse<T>;
-    try {
-      parsed = JSON.parse(rawText) as AppsScriptApiResponse<T>;
-    } catch {
-      throw new Error(
-        `Risposta non valida dal backend Apps Script (HTTP ${response.status}). Verifica che la Web App sia pubblicata con accesso "Chiunque".`
-      );
-    }
-
-    if (typeof parsed !== 'object' || parsed === null || typeof parsed.ok !== 'boolean') {
-      throw new Error(
-        `Formato risposta non valido dal backend Apps Script (HTTP ${response.status}).`
-      );
-    }
-
-    if (!response.ok && parsed.ok !== false) {
-      throw new Error(`Errore HTTP ${response.status} dal backend Apps Script.`);
-    }
-
-    return parsed;
+    rawText = await response.text();
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Timeout di connessione verso Google Apps Script. Riprova tra qualche secondo.');
+      const timeoutErr = new Error(
+        'Timeout di connessione verso Google Apps Script (30s). La richiesta potrebbe essere stata comunque elaborata dal server.'
+      ) as Error & { canRetry?: boolean; isTimeout?: boolean };
+      timeoutErr.canRetry = true;
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
     }
-    throw err;
+    const netErr = new Error(
+      `Errore di rete o CORS durante la comunicazione con Apps Script: ${err instanceof Error ? err.message : String(err)}`
+    ) as Error & { canRetry?: boolean };
+    netErr.canRetry = true;
+    throw netErr;
   } finally {
     window.clearTimeout(timeoutId);
   }
+
+  const contentType = response.headers.get('content-type') || '';
+  const isHtml = rawText.includes('<!DOCTYPE html>') || rawText.includes('<html') || contentType.includes('text/html');
+
+  if (!response.ok || isHtml) {
+    const status = response.status;
+    let message = `Errore HTTP ${status} dal backend Apps Script.`;
+    let canRetry = true;
+
+    if (status === 429) {
+      message = 'Servizio temporaneamente sovraccarico (HTTP 429 - troppe richieste). Riprova tra qualche minuto.';
+    } else if (status >= 500) {
+      message = `Errore temporaneo del server Apps Script (HTTP ${status}). Riprova tra qualche istante.`;
+    } else if (isHtml) {
+      message = 'La Web App Apps Script ha restituito una pagina HTML temporanea (possibile cold start, redirect o manutenzione di Google). Riprova tra qualche istante.';
+    }
+
+    const httpErr = new Error(message) as Error & { canRetry?: boolean; status?: number };
+    httpErr.canRetry = canRetry;
+    httpErr.status = status;
+    throw httpErr;
+  }
+
+  let parsed: AppsScriptApiResponse<T>;
+  try {
+    parsed = JSON.parse(rawText) as AppsScriptApiResponse<T>;
+  } catch {
+    const parseErr = new Error(
+      `Risposta non JSON dal backend Apps Script (HTTP ${response.status}). Verifica che la Web App sia pubblicata con accesso "Chiunque".`
+    ) as Error & { canRetry?: boolean };
+    parseErr.canRetry = false;
+    throw parseErr;
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || typeof parsed.ok !== 'boolean') {
+    const fmtErr = new Error(
+      `Formato risposta non valido dal backend Apps Script (HTTP ${response.status}).`
+    ) as Error & { canRetry?: boolean };
+    fmtErr.canRetry = true;
+    throw fmtErr;
+  }
+
+  if (!response.ok && parsed.ok !== false) {
+    const err = new Error(parsed.error || `Errore HTTP ${response.status} dal backend Apps Script.`) as Error & { canRetry?: boolean };
+    err.canRetry = response.status >= 500 || response.status === 429;
+    throw err;
+  }
+
+  return parsed;
 }
 
 export async function fetchWaitingRoomStatus(params: {

@@ -16,14 +16,17 @@ import {
   Mail,
   MessageCircle,
   Phone,
+  Play,
   RefreshCw,
+  Send,
   ShieldCheck,
   Sparkles,
   Trophy,
+  UserCheck,
   Wallet,
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   isAppsScriptConfigured,
   triggerCandidaturaNotification,
@@ -40,6 +43,11 @@ import {
   type ConfigurazionePublica,
   type DocumentoUfficialeRecord,
 } from '../lib/firestore';
+import {
+  buildProvisionalWhatsappUrl,
+  isProvisionalWhatsappUnlockedByVideo,
+  loadIntroVideoCompletion,
+} from '../lib/introVideoStorage';
 import { parseFirestoreUiError } from '../lib/notifications';
 import {
   CHAT_RULES_VERSION,
@@ -50,6 +58,7 @@ import {
 } from '../lib/officialDocuments';
 import { downloadOfficialDocumentPdf } from '../lib/pdfGenerator';
 import { loadWaitingRoomPass, type WaitingRoomPass } from '../lib/waitingRoomStorage';
+import { FicupIntroVideo } from './FicupIntroVideo';
 import { FicupLogo } from './FicupLogo';
 import { PrivacyModal } from './PrivacyModal';
 import { RegulationContentView } from './RegulationContentView';
@@ -61,13 +70,13 @@ interface RecruitmentWizardProps {
   onOpenWaitingRoom?: () => void;
 }
 
-const STEP_LABELS = [
-  'Dati',
-  'Privacy GDPR',
-  'Regolamento',
-  'Regole Chat',
-  'Riepilogo e Invio',
-  'Prossimi Passaggi',
+const STEP_META = [
+  { num: 1, short: '01', label: 'Dati', Icon: UserCheck },
+  { num: 2, short: '02', label: 'Privacy', Icon: ShieldCheck },
+  { num: 3, short: '03', label: 'Regolamento PDF', Icon: FileText },
+  { num: 4, short: '04', label: 'Regole Chat', Icon: MessageCircle },
+  { num: 5, short: '05', label: 'Invio', Icon: Send },
+  { num: 6, short: '06', label: 'Prossimi Passi', Icon: Sparkles },
 ] as const;
 
 export type WizardEmailDispatchState =
@@ -98,7 +107,6 @@ export interface RecruitmentStep6Props {
   >;
   submittedRecord: SubmittedWizardRecord | null;
   emailDispatchState: WizardEmailDispatchState;
-  emailDispatchDetail: string | null;
   isAppsScriptReady: boolean;
   canRetryEmail?: boolean;
   onRetryEmailNotification: () => void;
@@ -106,239 +114,357 @@ export interface RecruitmentStep6Props {
   onOpenWaitingRoom?: () => void;
 }
 
-const VISUAL_FLOW_STEPS = [
-  {
-    number: '1',
-    title: 'CANDIDATURA RICEVUTA',
-    description: 'I tuoi dati sono stati registrati.',
-    state: 'done' as const,
-  },
-  {
-    number: '2',
-    title: 'VERIFICA DELLO STAFF',
-    description: 'Il nostro Staff controllerà la candidatura.',
-    state: 'current' as const,
-  },
-  {
-    number: '3',
-    title: 'CONFERMA FINALE',
-    description: 'Riceverai un aggiornamento quando la verifica sarà completata.',
-    state: 'upcoming' as const,
-  },
-];
-
 export function RecruitmentStep6({
   config,
   submittedRecord,
   emailDispatchState,
-  emailDispatchDetail,
   isAppsScriptReady,
   canRetryEmail = false,
   onRetryEmailNotification,
   onExitToHome,
   onOpenWaitingRoom,
 }: RecruitmentStep6Props) {
+  const prefersReducedMotion = Boolean(useReducedMotion());
   const codiceCandidatura = submittedRecord?.codiceCandidatura ?? 'FICUP26';
+  const emailFantaleghe = submittedRecord?.emailFantaleghe ?? '';
+  const rawFirstName = (submittedRecord?.nomeCompleto || '').trim().split(/\s+/)[0] || '';
+  const heroHeadline = rawFirstName
+    ? `${rawFirstName.toUpperCase()}! LA TUA CANDIDATURA È STATA INVIATA!`
+    : 'LA TUA CANDIDATURA È STATA INVIATA!';
+
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [whatsappUnlocked, setWhatsappUnlocked] = useState<boolean>(() => {
+    if (!submittedRecord?.codiceCandidatura) return false;
+    return isProvisionalWhatsappUnlockedByVideo(
+      loadIntroVideoCompletion(submittedRecord.codiceCandidatura, submittedRecord.emailFantaleghe)
+    );
+  });
+  const [justUnlockedGlow, setJustUnlockedGlow] = useState(false);
+
+  const handleVideoUnlockChange = useCallback((unlocked: boolean, justTriggered?: boolean) => {
+    setWhatsappUnlocked(unlocked);
+    if (unlocked && justTriggered) {
+      setJustUnlockedGlow(true);
+    }
+  }, []);
+
+  const handleCopyCode = async () => {
+    if (!codiceCandidatura || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(codiceCandidatura);
+      setCopiedCode(true);
+      window.setTimeout(() => setCopiedCode(false), 2000);
+    } catch {
+      // Ignore clipboard failure
+    }
+  };
+
+  const prefilledWhatsappLink = buildProvisionalWhatsappUrl(
+    config.linkWhatsappProvvisorio,
+    codiceCandidatura
+  );
 
   return (
     <motion.div
       key="step-6"
-      initial={{ opacity: 0, y: 10 }}
+      initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      transition={{ duration: 0.2 }}
-      className="space-y-6"
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.25 }}
+      className="divide-y divide-slate-200"
     >
-      {/* Intestazione conferma ricezione */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <span className="font-bold uppercase tracking-widest text-[#C69214]">
-            Passaggio 6 · Conferma e prossimi passaggi
-          </span>
-          <span aria-hidden="true">·</span>
-          <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
-            {codiceCandidatura}
-          </span>
-        </div>
-
-        <h1 className="font-display text-2xl sm:text-3xl font-black tracking-tight text-[#0B1F4D]">
-          LA TUA CANDIDATURA È STATA RICEVUTA!
-        </h1>
-
-        <div className="rounded-2xl border border-[#0B1F4D]/15 bg-[#0B1F4D]/[0.03] px-4 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <Hourglass className="w-4 h-4 text-[#C69214] shrink-0" />
-            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              Stato attuale
-            </span>
+      {/* FASCIA CONFERMA IMMEDIATA (ZERO MESSAGGI TECNICI) */}
+      <section className="bg-gradient-to-br from-[#071436] via-[#0B1F4D] to-[#13327A] text-white px-4 sm:px-8 py-8 sm:py-11">
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <p className="text-xs sm:text-sm font-bold uppercase tracking-[0.2em] text-[#FDE68A]">
+              Candidatura completata
+            </p>
           </div>
-          <span className="font-mono-tabular text-xs sm:text-sm font-extrabold tracking-wide text-[#0B1F4D]">
-            IN ATTESA DI VERIFICA STAFF
-          </span>
-        </div>
-      </div>
 
-      {/* Percorso visivo a 3 step */}
-      <div className="space-y-3">
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-          Percorso della tua candidatura
-        </p>
-        <div className="divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white overflow-hidden">
-          {VISUAL_FLOW_STEPS.map((item) => {
-            const isDone = item.state === 'done';
-            const isCurrent = item.state === 'current';
-            return (
-              <div
-                key={item.number}
-                className={`p-4 sm:p-5 flex items-start gap-4 ${
-                  isCurrent ? 'bg-amber-50/40' : isDone ? 'bg-emerald-50/35' : 'bg-white'
+          <div className="space-y-2.5">
+            <h1 className="font-display text-2xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white leading-tight">
+              {heroHeadline}
+            </h1>
+            <p className="text-base sm:text-lg text-slate-200 font-medium">
+              La tua richiesta è stata registrata correttamente.
+            </p>
+          </div>
+
+          {/* Codice personale in evidenza */}
+          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-white/15">
+            <div className="space-y-1">
+              <p className="text-xs font-bold uppercase tracking-widest text-[#FDE68A]">
+                Codice personale
+              </p>
+              <p className="font-mono-tabular text-3xl sm:text-4xl font-black tracking-wider text-white">
+                {codiceCandidatura}
+              </p>
+              <p className="text-xs sm:text-sm text-slate-200 leading-relaxed pt-1">
+                <strong>Conserva questo codice:</strong> ti servirà per comunicare con lo staff.{' '}
+                Ora puoi proseguire con i prossimi passaggi.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCopyCode}
+              className="min-h-[46px] px-5 py-2.5 rounded-xl bg-white/12 hover:bg-white/20 border border-white/25 text-xs sm:text-sm font-bold text-white inline-flex items-center justify-center gap-2 shrink-0 cursor-pointer transition-colors"
+            >
+              {copiedCode ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-300" />
+                  <span>Codice copiato</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 text-[#FDE68A]" />
+                  <span>Copia codice</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Stato email pulito e mai ingannevole */}
+          {emailDispatchState === 'emails_confirmed' && (
+            <div className="pt-3 border-t border-white/15 flex items-center gap-2.5 text-xs sm:text-sm text-emerald-200">
+              <Mail className="w-4 h-4 shrink-0" />
+              <span>
+                Ti abbiamo inviato un&apos;email di riepilogo (controlla anche <strong>Spam</strong> o <strong>Promozioni</strong>).
+              </span>
+            </div>
+          )}
+
+          {emailDispatchState === 'sending' && (
+            <div className="pt-3 border-t border-white/15 flex items-center gap-2.5 text-xs sm:text-sm text-sky-200">
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              <span>Invio del riepilogo alla tua email in corso...</span>
+            </div>
+          )}
+
+          {(emailDispatchState === 'notification_error' || emailDispatchState === 'emails_pending') &&
+            canRetryEmail &&
+            isAppsScriptReady && (
+              <div className="pt-3 border-t border-white/15 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-amber-200">
+                <span>Non hai ancora ricevuto il riepilogo via email?</span>
+                <button
+                  type="button"
+                  onClick={onRetryEmailNotification}
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-white text-[#071436] text-xs font-extrabold hover:bg-[#FDE68A] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Invia di nuovo il riepilogo</span>
+                </button>
+              </div>
+            )}
+        </div>
+      </section>
+
+      {/* FASE 1 — GUARDA IL VIDEO FICUP */}
+      <section className="bg-gradient-to-r from-[#0E2661] via-[#13337D] to-[#0B1F4D] text-white px-4 sm:px-8 py-8 sm:py-10">
+        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-start gap-5 sm:gap-7">
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="font-mono-tabular text-4xl sm:text-5xl font-black text-[#FDE68A]/90 leading-none">
+              01
+            </span>
+            <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center text-[#FDE68A]">
+              <Play className="w-5 h-5 fill-current" />
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4">
+            <div className="space-y-1.5">
+              <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-[#FDE68A]">
+                FASE 1 · GUARDA IL VIDEO FICUP
+              </p>
+              <h2 className="font-display text-2xl sm:text-3xl font-black text-white leading-tight">
+                SCOPRI COSA TI ASPETTA IN FICUP
+              </h2>
+              <p className="text-sm sm:text-base text-slate-200 leading-relaxed max-w-2xl">
+                Guarda il nostro breve videoclip: ti spiegheremo come entrare nella community, attendere l&apos;accettazione della candidatura e completare l&apos;accesso a Fantaleghe.
+              </p>
+            </div>
+
+            <FicupIntroVideo
+              variant="phase1"
+              codiceCandidatura={codiceCandidatura}
+              emailFantaleghe={emailFantaleghe}
+              provisionalWhatsappUrl={config.linkWhatsappProvvisorio}
+              canAccessProvisionalWa={true}
+              realState={submittedRecord?.stato ?? 'NUOVO'}
+              onUnlockStateChange={handleVideoUnlockChange}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* FASE 2 — ENTRA NEL GRUPPO WHATSAPP PROVVISORIO */}
+      <section
+        className={`px-4 sm:px-8 py-8 sm:py-10 transition-colors duration-300 ${
+          whatsappUnlocked
+            ? 'bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 text-[#0B1F4D]'
+            : 'bg-slate-100/90 text-[#0B1F4D]'
+        }`}
+      >
+        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-start gap-5 sm:gap-7">
+          <div className="flex items-center gap-3 shrink-0">
+            <span
+              className={`font-mono-tabular text-4xl sm:text-5xl font-black leading-none ${
+                whatsappUnlocked ? 'text-emerald-700' : 'text-slate-400'
+              }`}
+            >
+              02
+            </span>
+            <div
+              className={`w-11 h-11 rounded-2xl flex items-center justify-center ${
+                whatsappUnlocked
+                  ? 'bg-emerald-700 text-white shadow-md'
+                  : 'bg-white text-slate-400 border border-slate-200'
+              }`}
+            >
+              {whatsappUnlocked ? (
+                <MessageCircle className="w-5 h-5" />
+              ) : (
+                <Lock className="w-5 h-5" />
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4">
+            <div className="space-y-1.5">
+              <p
+                className={`text-xs font-extrabold uppercase tracking-[0.2em] ${
+                  whatsappUnlocked ? 'text-emerald-700' : 'text-slate-500'
                 }`}
               >
-                <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-mono-tabular text-sm font-extrabold ${
-                    isDone
-                      ? 'bg-emerald-700 text-white'
-                      : isCurrent
-                        ? 'bg-[#0B1F4D] text-[#D4AF37]'
-                        : 'bg-slate-100 text-slate-500 border border-slate-200'
-                  }`}
+                FASE 2 · GRUPPO PROVVISORIO
+              </p>
+              <h2 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D] leading-tight">
+                ENTRA NEL GRUPPO PROVVISORIO
+              </h2>
+              <p className="text-sm sm:text-base text-slate-700 leading-relaxed max-w-2xl">
+                Entra nel gruppo WhatsApp dedicato ai nuovi candidati. Una volta entrato,{' '}
+                <strong>presenta brevemente la tua richiesta utilizzando il codice personale</strong>{' '}
+                <strong className="font-mono-tabular text-[#0B1F4D]">{codiceCandidatura}</strong>.
+              </p>
+            </div>
+
+            {whatsappUnlocked && prefilledWhatsappLink ? (
+              <motion.div
+                initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                className="space-y-2.5"
+              >
+                <motion.a
+                  href={prefilledWhatsappLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  animate={
+                    justUnlockedGlow && !prefersReducedMotion
+                      ? {
+                          scale: [1, 1.025, 1],
+                          boxShadow: [
+                            '0 10px 25px -8px rgba(4,120,87,0.35)',
+                            '0 0 32px 6px rgba(16,185,129,0.55)',
+                            '0 10px 25px -8px rgba(4,120,87,0.35)',
+                          ],
+                        }
+                      : undefined
+                  }
+                  transition={{ duration: 1.5, repeat: justUnlockedGlow ? 3 : 0 }}
+                  className="min-h-[56px] w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-sm sm:text-base font-black tracking-wide transition-colors inline-flex items-center justify-center gap-2.5 shadow-lg"
                 >
-                  {isDone ? <Check className="w-4 h-4" /> : item.number}
-                </div>
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <h2 className="font-display text-sm sm:text-base font-extrabold text-[#0B1F4D]">
-                    {item.number}. {item.title}
-                  </h2>
-                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    {item.description}
-                  </p>
-                </div>
+                  <MessageCircle className="w-5 h-5" />
+                  <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
+                  <ExternalLink className="w-4 h-4 opacity-90" />
+                </motion.a>
+                <p className="text-xs text-emerald-900 font-medium">
+                  Il messaggio di presentazione con il tuo codice verrà precompilato automaticamente su WhatsApp.
+                </p>
+              </motion.div>
+            ) : (
+              <div className="flex items-center gap-2.5 text-xs sm:text-sm font-semibold text-slate-600 pt-1">
+                <Lock className="w-4 h-4 text-[#C69214] shrink-0" />
+                <span>
+                  Apri il videoclip nella <strong>Fase 1</strong> qui sopra per attivare questo pulsante.
+                </span>
               </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Stato invio email di ricezione (non influenza lo stato della candidatura) */}
-      {emailDispatchState === 'sending' ? (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-[#0B1F4D]">
-          <Loader2 className="w-5 h-5 animate-spin text-[#0284C7] shrink-0 mt-0.5" />
-          <p className="leading-relaxed">
-            <strong>Email di ricezione in invio:</strong> stiamo inviando la conferma di registrazione al tuo indirizzo email e notificando lo Staff. La candidatura è già salvata con codice <span className="font-mono-tabular font-bold">{codiceCandidatura}</span>.
-          </p>
-        </div>
-      ) : emailDispatchState === 'emails_confirmed' ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 flex items-start gap-3 text-xs sm:text-sm text-emerald-950">
-          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-          <p className="leading-relaxed">
-            <strong>Email di ricezione confermate:</strong> abbiamo inviato il riepilogo al tuo indirizzo email (controlla anche Spam o Promozioni) e avvisato lo Staff per la verifica manuale.
-          </p>
-        </div>
-      ) : emailDispatchState === 'emails_pending' ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3 text-xs sm:text-sm text-amber-950">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
-            <p className="leading-relaxed">
-              <strong>Candidatura salvata · Email ancora in elaborazione:</strong> la tua richiesta è regolarmente registrata in stato <span className="font-mono-tabular font-bold">NUOVO</span>; la notifica email è in coda di invio.
-              {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
-            </p>
+            )}
           </div>
-          {canRetryEmail && isAppsScriptReady && (
-            <button
-              type="button"
-              onClick={onRetryEmailNotification}
-              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-              <span>Riprova invio email di ricezione</span>
-            </button>
-          )}
         </div>
-      ) : emailDispatchState === 'notification_error' || emailDispatchState === 'unconfigured' ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3 text-xs sm:text-sm text-amber-950">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
-            <p className="leading-relaxed">
-              <strong>Candidatura salvata · Notifica email non immediata:</strong> la candidatura è registrata su Firestore con codice <span className="font-mono-tabular font-bold">{codiceCandidatura}</span> in attesa di verifica Staff
-              {emailDispatchState === 'unconfigured'
-                ? ' (servizio email automatico non collegato in questo ambiente).'
-                : `.${emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}`}
-            </p>
+      </section>
+
+      {/* FASE 3 — VAI ALL'AREA PERSONALE */}
+      <section className="bg-gradient-to-r from-amber-50/80 via-white to-slate-50 px-4 sm:px-8 py-8 sm:py-10 text-[#0B1F4D]">
+        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-start gap-5 sm:gap-7">
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="font-mono-tabular text-4xl sm:text-5xl font-black text-[#C69214] leading-none">
+              03
+            </span>
+            <div className="w-11 h-11 rounded-2xl bg-[#0B1F4D] text-[#FDE68A] flex items-center justify-center">
+              <DoorOpen className="w-5 h-5" />
+            </div>
           </div>
-          {emailDispatchState === 'notification_error' && canRetryEmail && isAppsScriptReady && (
-            <button
-              type="button"
-              onClick={onRetryEmailNotification}
-              className="min-h-[42px] w-full sm:w-auto px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-              <span>Riprova invio email di ricezione</span>
-            </button>
-          )}
+
+          <div className="flex-1 space-y-5">
+            <div className="space-y-1.5">
+              <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-[#C69214]">
+                FASE 3 · AREA PERSONALE E ATTESA
+              </p>
+              <h2 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D] leading-tight">
+                CONTROLLA LO STATO DELLA TUA CANDIDATURA
+              </h2>
+              <p className="text-sm sm:text-base text-slate-700 leading-relaxed max-w-2xl">
+                Da qui potrai controllare in qualsiasi momento lo stato della tua candidatura e seguire gli aggiornamenti dello staff.
+              </p>
+            </div>
+
+            {onOpenWaitingRoom && (
+              <button
+                type="button"
+                onClick={onOpenWaitingRoom}
+                className="min-h-[56px] w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-[#0B1F4D] hover:bg-[#153985] text-white text-sm sm:text-base font-black tracking-wide transition-colors inline-flex items-center justify-center gap-2.5 shadow-lg cursor-pointer"
+              >
+                <DoorOpen className="w-5 h-5 text-[#FDE68A]" />
+                <span>VAI ALL&apos;AREA PERSONALE</span>
+                <ArrowRight className="w-4 h-4 text-[#FDE68A]" />
+              </button>
+            )}
+
+            <div className="pt-3 border-t border-slate-200 space-y-1.5 text-sm text-slate-700 leading-relaxed max-w-2xl">
+              <p className="font-black text-[#0B1F4D] uppercase tracking-wide text-xs sm:text-sm">
+                ORA DEVI SOLO ATTENDERE LA VALUTAZIONE DELLO STAFF.
+              </p>
+              <p>
+                Quando la candidatura verrà accettata, riceverai l&apos;invito ufficiale via email.{' '}
+                <strong>Controlla anche Spam e Promozioni.</strong>
+              </p>
+            </div>
+
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+              <span>
+                Per assistenza:{' '}
+                <strong className="font-mono-tabular text-[#0B1F4D]">
+                  {config.emailOperativa}
+                </strong>
+              </span>
+              <button
+                type="button"
+                onClick={onExitToHome}
+                className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold text-[#0B1F4D] hover:bg-slate-200/70 transition-colors cursor-pointer"
+              >
+                Torna alla home
+              </button>
+            </div>
+          </div>
         </div>
-      ) : null}
-
-      {/* Protezione Gruppo WhatsApp Ufficiale — sempre bloccato prima della conferma manuale Staff */}
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 flex items-start gap-3 text-xs sm:text-sm text-slate-700">
-        <Lock className="w-5 h-5 text-[#0B1F4D] shrink-0 mt-0.5" />
-        <p className="leading-relaxed">
-          <strong className="text-[#0B1F4D]">Gruppo WhatsApp Ufficiale protetto:</strong> il collegamento al gruppo ufficiale resta riservato e si sblocca nella tua Area Personale esclusivamente dopo la verifica manuale e la conferma finale da parte dello Staff.
-        </p>
-      </div>
-
-      {/* Gruppo WhatsApp Provvisorio di supporto */}
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-3">
-        <div className="flex items-center gap-2 text-emerald-900">
-          <MessageCircle className="w-5 h-5 text-emerald-700" />
-          <h2 className="font-display text-base font-bold">
-            Gruppo WhatsApp Provvisorio (Supporto)
-          </h2>
-        </div>
-        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-          Canale facoltativo di supporto community mentre attendi la verifica dello Staff. Se scrivi in chat per ricevere assistenza, indica il tuo codice{' '}
-          <strong className="font-mono-tabular text-[#0B1F4D]">{codiceCandidatura}</strong>.
-        </p>
-        <a
-          href={config.linkWhatsappProvvisorio}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="min-h-[48px] w-full px-5 py-3 rounded-xl bg-emerald-700 text-white text-sm font-bold hover:bg-emerald-800 transition-colors inline-flex items-center justify-center gap-2"
-        >
-          <MessageCircle className="w-4 h-4" />
-          <span>ENTRA NEL GRUPPO WHATSAPP PROVVISORIO</span>
-          <ExternalLink className="w-4 h-4 opacity-80" />
-        </a>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex items-start gap-2.5 text-xs text-slate-600">
-        <Mail className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
-        <span>
-          Assistenza operativa:{' '}
-          <span className="font-mono-tabular font-semibold text-[#0B1F4D]">
-            {config.emailOperativa}
-          </span>
-        </span>
-      </div>
-
-      <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
-        <button
-          type="button"
-          onClick={onExitToHome}
-          className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-[#0B1F4D] text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
-        >
-          Torna alla homepage
-        </button>
-        {onOpenWaitingRoom && (
-          <button
-            type="button"
-            onClick={onOpenWaitingRoom}
-            className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <DoorOpen className="w-4 h-4 text-[#D4AF37]" />
-            <span>VAI ALLA MIA AREA PERSONALE</span>
-          </button>
-        )}
-      </div>
+      </section>
     </motion.div>
   );
 }
@@ -349,15 +475,16 @@ export function RecruitmentWizard({
   onCandidaturaSubmitted,
   onOpenWaitingRoom,
 }: RecruitmentWizardProps) {
+  const prefersReducedMotion = Boolean(useReducedMotion());
   const [step, setStep] = useState<number>(1);
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
 
-  // Remote official documents (Regolamento testuale & optional Chat Rules text override)
+  // Documenti ufficiali
   const [docsLoading, setDocsLoading] = useState(true);
   const [activeRegolamento, setActiveRegolamento] = useState<DocumentoUfficialeRecord | null>(null);
   const [activeChatRulesDoc, setActiveChatRulesDoc] = useState<DocumentoUfficialeRecord | null>(null);
 
-  // Step 1 Form State
+  // Step 1 Form
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
   const [emailFantaleghe, setEmailFantaleghe] = useState('');
@@ -368,7 +495,7 @@ export function RecruitmentWizard({
   const [step1Error, setStep1Error] = useState<string | null>(null);
   const [duplicateLocalWarning, setDuplicateLocalWarning] = useState<string | null>(null);
 
-  // Mandatory Document Consents (Steps 2, 3, 4)
+  // Consensi
   const [consensoPrivacy, setConsensoPrivacy] = useState(false);
   const [step2Error, setStep2Error] = useState<string | null>(null);
 
@@ -379,16 +506,13 @@ export function RecruitmentWizard({
   const [consensoRegoleChat, setConsensoRegoleChat] = useState(false);
   const [step4Error, setStep4Error] = useState<string | null>(null);
 
-  // Step 5 Submission State
+  // Invio
   const [submitting, setSubmitting] = useState(false);
   const [submitStage, setSubmitStage] = useState<'verifying' | 'saving'>('verifying');
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [acceptSyncWarning, setAcceptSyncWarning] = useState<string | null>(null);
   const [submittedRecord, setSubmittedRecord] = useState<SubmittedWizardRecord | null>(null);
   const [emailDispatchState, setEmailDispatchState] = useState<WizardEmailDispatchState>('idle');
-  const [emailDispatchDetail, setEmailDispatchDetail] = useState<string | null>(null);
   const [canRetryEmail, setCanRetryEmail] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,7 +538,6 @@ export function RecruitmentWizard({
     };
   }, []);
 
-  // Local device duplicate-email check (never reads public candidature collection)
   useEffect(() => {
     const cleanEmail = emailFantaleghe.trim().toLowerCase();
     if (!cleanEmail) {
@@ -424,14 +547,14 @@ export function RecruitmentWizard({
     const existingPass = loadWaitingRoomPass();
     if (existingPass && existingPass.emailFantaleghe.trim().toLowerCase() === cleanEmail) {
       setDuplicateLocalWarning(
-        `Su questo dispositivo risulta già registrata una candidatura con questa email (${existingPass.codiceCandidatura}). Se vuoi controllare lo stato invece di inviarne una nuova, accedi all'Area Personale.`
+        `Su questo dispositivo hai già una candidatura collegata a questa email (${existingPass.codiceCandidatura}). Puoi controllare lo stato direttamente dalla tua Area Personale.`
       );
     } else {
       setDuplicateLocalWarning(null);
     }
   }, [emailFantaleghe]);
 
-  const progressPercent = Math.round((step / STEP_LABELS.length) * 100);
+  const progressPercent = Math.round((step / STEP_META.length) * 100);
   const isSubmitted = submittedRecord !== null;
   const emailValidHint =
     emailFantaleghe.trim().length > 0 &&
@@ -473,7 +596,7 @@ export function RecruitmentWizard({
         cellulare,
         nomeSquadra,
         note,
-        consensoPrivacy: true, // checked explicitly at Step 2
+        consensoPrivacy: true,
         versioneInformativa: config.versioneInformativa,
       });
       setCellulare(validated.cellulare);
@@ -486,9 +609,7 @@ export function RecruitmentWizard({
   const handleStep2Next = () => {
     setStep2Error(null);
     if (!consensoPrivacy) {
-      setStep2Error(
-        'Per proseguire devi leggere e accettare l’Informativa Privacy GDPR FICUP.'
-      );
+      setStep2Error("Per proseguire accetta l'Informativa Privacy.");
       return;
     }
     setStep(3);
@@ -497,9 +618,7 @@ export function RecruitmentWizard({
   const handleStep3Next = () => {
     setStep3Error(null);
     if (!consensoRegolamento) {
-      setStep3Error(
-        'Per proseguire devi confermare di aver preso visione del Regolamento ufficiale FICUP.'
-      );
+      setStep3Error('Per proseguire conferma la lettura del Regolamento PDF.');
       return;
     }
     setStep(4);
@@ -508,9 +627,7 @@ export function RecruitmentWizard({
   const handleStep4Next = () => {
     setStep4Error(null);
     if (!consensoRegoleChat) {
-      setStep4Error(
-        'Per proseguire devi accettare le Regole della Chat WhatsApp Ufficiale FICUP.'
-      );
+      setStep4Error('Per proseguire accetta le Regole Chat.');
       return;
     }
     setStep(5);
@@ -518,22 +635,17 @@ export function RecruitmentWizard({
 
   const handleRealSubmit = async () => {
     setSubmitError(null);
-    setAcceptSyncWarning(null);
 
     if (!config.iscrizioniAperte) {
-      setSubmitError('Le candidature risultano momentaneamente chiuse dallo staff.');
+      setSubmitError('Le iscrizioni risultano momentaneamente chiuse.');
       return;
     }
     if (!isFirebaseConfigured) {
-      setSubmitError(
-        'Configurazione Firebase mancante nell’ambiente: impossibile inviare la candidatura al database.'
-      );
+      setSubmitError('Servizio momentaneamente non disponibile.');
       return;
     }
     if (!consensoPrivacy || !consensoRegolamento || !consensoRegoleChat) {
-      setSubmitError(
-        'Tutte le accettazioni documentali (Privacy GDPR, Regolamento ufficiale e Regole Chat WhatsApp) sono obbligatorie prima dell’invio.'
-      );
+      setSubmitError('Completa tutte le accettazioni obbligatorie prima di inviare.');
       return;
     }
 
@@ -553,11 +665,9 @@ export function RecruitmentWizard({
         regolamentoVersione: regolamentoVersionLabel,
       });
 
-      // Animazione clessidra di verifica completezza (~2.5 secondi)
-      const minVerificationWait = new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 2500);
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1400);
       });
-      await minVerificationWait;
 
       setSubmitStage('saving');
       const result = await submitCandidatura(clean);
@@ -577,11 +687,8 @@ export function RecruitmentWizard({
           regoleChatAccettate: true,
           versioneRegoleChat: chatRulesVersionLabel,
         });
-      } catch (accErr) {
-        const msg = parseFirestoreUiError(accErr);
-        setAcceptSyncWarning(
-          `Nota tecnica: candidatura salvata con successo, ma il registro separato "accettazioni_documenti" non è stato sincronizzato (${msg}).`
-        );
+      } catch {
+        // Non blocca il completamento lato candidato
       }
 
       const nomeCompleto = `${clean.nome} ${clean.cognome}`;
@@ -625,23 +732,26 @@ export function RecruitmentWizard({
           );
         }
         setEmailDispatchState(res.outcome);
-        setEmailDispatchDetail(res.detail ?? null);
         setCanRetryEmail(res.canRetry);
       };
 
       if (!isAppsScriptConfigured) {
         setEmailDispatchState('unconfigured');
-        setEmailDispatchDetail(null);
         setCanRetryEmail(false);
       } else {
         setEmailDispatchState('sending');
-        setEmailDispatchDetail(null);
         setCanRetryEmail(false);
         triggerCandidaturaNotification({
           candidaturaId: result.id,
           codiceCandidatura: result.codiceCandidatura,
           emailFantaleghe: clean.emailFantaleghe,
         }).then((res) => applyNotificationOutcome(result.id, res));
+      }
+
+      // Passa subito alla schermata guidata a 3 fasi dopo l'invio
+      setStep(6);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
       setSubmitError(parseFirestoreUiError(err));
@@ -658,7 +768,6 @@ export function RecruitmentWizard({
       return;
     }
     setEmailDispatchState('sending');
-    setEmailDispatchDetail(null);
     setCanRetryEmail(false);
     const res = await triggerCandidaturaNotification({
       candidaturaId: submittedRecord.id,
@@ -671,7 +780,6 @@ export function RecruitmentWizard({
       );
     }
     setEmailDispatchState(res.outcome);
-    setEmailDispatchDetail(res.detail ?? null);
     setCanRetryEmail(res.canRetry);
   };
 
@@ -722,26 +830,13 @@ export function RecruitmentWizard({
     }
   };
 
-  const handleCopyCode = async () => {
-    if (!submittedRecord || typeof navigator === 'undefined' || !navigator.clipboard) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(submittedRecord.codiceCandidatura);
-      setCopiedCode(true);
-      window.setTimeout(() => setCopiedCode(false), 2000);
-    } catch {
-      // Ignore clipboard error
-    }
-  };
-
   const canVisitStep = (targetStep: number): boolean => {
-    if (targetStep === 1) {
-      return !isSubmitted;
+    if (isSubmitted) {
+      return targetStep === 6;
     }
+    if (targetStep === 1) return true;
     if (targetStep === 2) {
       return (
-        !isSubmitted &&
         nome.trim().length >= 1 &&
         cognome.trim().length >= 1 &&
         emailValidHint &&
@@ -749,84 +844,86 @@ export function RecruitmentWizard({
         squadValidHint
       );
     }
-    if (targetStep === 3) {
-      return !isSubmitted && consensoPrivacy;
-    }
-    if (targetStep === 4) {
-      return !isSubmitted && consensoPrivacy && consensoRegolamento;
-    }
-    if (targetStep === 5) {
-      return isSubmitted || (consensoPrivacy && consensoRegolamento && consensoRegoleChat);
-    }
-    return isSubmitted;
+    if (targetStep === 3) return consensoPrivacy;
+    if (targetStep === 4) return consensoPrivacy && consensoRegolamento;
+    if (targetStep === 5) return consensoPrivacy && consensoRegolamento && consensoRegoleChat;
+    return false;
   };
 
   const inputClass =
-    'w-full min-h-[48px] px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20 focus:border-[#0B1F4D] transition-all';
+    'w-full min-h-[50px] px-4 py-3 rounded-xl border border-slate-300 bg-white text-sm sm:text-base text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/25 focus:border-[#0B1F4D] transition-all';
 
   return (
-    <div className="bg-slate-50/70 min-h-[calc(100vh-4.5rem)] py-6 sm:py-10">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6">
-        {/* Top Back + Progress Counter */}
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <button
-            type="button"
-            onClick={onExitToHome}
-            className="min-h-[44px] inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-[#0B1F4D] transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4 text-[#C69214]" />
-            <span>Torna alla home</span>
-          </button>
-          <div className="flex items-center gap-2.5">
-            <span className="font-mono-tabular text-xs font-bold text-[#0B1F4D]">
-              Passaggio {step} di {STEP_LABELS.length} · {progressPercent}%
-            </span>
-            <FicupLogo size="xs" className="hidden sm:block ring-1 ring-slate-200 p-0.5 bg-white" />
-          </div>
-        </div>
+    <div className="bg-white min-h-[calc(100vh-4.5rem)] text-[#0B1F4D]">
+      {/* Barra superiore full-width snella con indicatore progressivo */}
+      <div className="bg-slate-50 border-b border-slate-200">
+        <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 space-y-3">
+          <div className="flex items-center justify-between gap-4">
+            <button
+              type="button"
+              onClick={onExitToHome}
+              className="min-h-[42px] inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#0B1F4D] hover:text-[#153985] transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-[#C69214]" />
+              <span>Torna alla home</span>
+            </button>
 
-        {/* Progress Bar & Stepper */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs mb-6">
+            <div className="flex items-center gap-2.5">
+              <span className="font-mono-tabular text-xs font-bold text-[#0B1F4D]">
+                Passaggio {step} / {STEP_META.length}
+              </span>
+              <FicupLogo size="xs" className="hidden sm:block" />
+            </div>
+          </div>
+
+          {/* Linea di avanzamento fluida */}
           <div
-            className="w-full h-2 bg-slate-100 rounded-full overflow-hidden"
+            className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"
             role="progressbar"
             aria-valuenow={progressPercent}
             aria-valuemin={0}
             aria-valuemax={100}
           >
             <motion.div
-              className="h-full bg-gradient-to-r from-[#0B1F4D] via-[#153985] to-[#C69214] rounded-full"
+              className="h-full bg-gradient-to-r from-[#0B1F4D] via-[#0284C7] to-[#D4AF37]"
               initial={false}
               animate={{ width: `${progressPercent}%` }}
               transition={{ duration: 0.3, ease: 'easeOut' }}
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-6 gap-1 sm:gap-2">
-            {STEP_LABELS.map((label, idx) => {
-              const stepNum = idx + 1;
-              const active = step === stepNum;
-              const completed = step > stepNum || (stepNum === 5 && isSubmitted);
-              const unlocked = canVisitStep(stepNum);
+          {/* Indicatori numerici progressivi e riconoscibili */}
+          <div className="grid grid-cols-6 gap-1 sm:gap-2">
+            {STEP_META.map(({ num, short, label, Icon }) => {
+              const active = step === num;
+              const completed = step > num;
+              const unlocked = canVisitStep(num);
               return (
                 <button
                   key={label}
                   type="button"
                   disabled={!unlocked}
-                  onClick={() => unlocked && setStep(stepNum)}
-                  title={`Passaggio ${stepNum}: ${label}`}
-                  className={`min-h-[46px] flex flex-col items-center justify-center rounded-xl px-1 py-1.5 text-center transition-all ${
+                  onClick={() => unlocked && setStep(num)}
+                  title={`Passaggio ${num}: ${label}`}
+                  className={`py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 text-center transition-all ${
                     active
                       ? 'bg-[#0B1F4D] text-white shadow-xs'
                       : completed
-                        ? 'bg-amber-50 text-[#0B1F4D] border border-amber-200'
+                        ? 'bg-emerald-50 text-emerald-800'
                         : unlocked
-                          ? 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/80'
-                          : 'bg-slate-50 text-slate-400 border border-slate-100 opacity-60 cursor-not-allowed'
+                          ? 'text-slate-600 hover:bg-slate-200/70'
+                          : 'text-slate-400 opacity-55 cursor-not-allowed'
                   } ${unlocked ? 'cursor-pointer' : ''}`}
                 >
-                  <span className="font-mono-tabular text-xs font-bold">{stepNum}</span>
-                  <span className="hidden sm:block text-[10px] leading-tight mt-0.5 truncate max-w-full">
+                  <div className="flex items-center gap-1">
+                    {completed ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-700" />
+                    ) : (
+                      <Icon className={`w-3.5 h-3.5 ${active ? 'text-[#FDE68A]' : ''}`} />
+                    )}
+                    <span className="font-mono-tabular text-xs font-extrabold">{short}</span>
+                  </div>
+                  <span className="hidden md:block text-[10px] font-semibold truncate max-w-full">
                     {label}
                   </span>
                 </button>
@@ -834,92 +931,89 @@ export function RecruitmentWizard({
             })}
           </div>
         </div>
+      </div>
 
-        {/* Main Step Card */}
-        <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-8 shadow-sm">
-          <AnimatePresence mode="wait">
-            {/* STEP 1 — PRESENTAZIONE & DATI CANDIDATO */}
-            {step === 1 && (
-              <motion.div
-                key="step-1"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                      Passaggio 1 · Presentazione e dati personali
-                    </p>
-                    <h1 className="mt-1 font-display text-2xl sm:text-3xl font-extrabold text-[#0B1F4D] tracking-tight">
-                      Candidatura FANTA ITALIA CUP ({config.stagione})
+      {/* Contenuto a tutta larghezza senza box ripetitivi */}
+      <AnimatePresence mode="wait">
+        {/* STEP 1 — PRESENTAZIONE & DATI */}
+        {step === 1 && (
+          <motion.div
+            key="step-1"
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            {/* Banda intestazione colorata */}
+            <section className="bg-gradient-to-br from-[#071436] via-[#0B1F4D] to-[#153985] text-white px-4 sm:px-8 py-7 sm:py-9">
+              <div className="max-w-4xl mx-auto space-y-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2.5 text-xs font-black uppercase tracking-[0.2em] text-[#FDE68A]">
+                      <span className="font-mono-tabular text-2xl sm:text-3xl leading-none">01</span>
+                      <span>Candidatura FANTA ITALIA CUP · {config.stagione}</span>
+                    </div>
+                    <h1 className="font-display text-2xl sm:text-4xl font-black tracking-tight text-white">
+                      Inserisci i tuoi dati per scendere in campo
                     </h1>
-                    <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                      Lega nazionale gratuita su Fantaleghe. Inserisci i tuoi dati reali: nei passaggi successivi prenderai visione di Informativa Privacy, Regolamento PDF e Regole Chat WhatsApp prima dell&apos;invio.
+                    <p className="text-sm sm:text-base text-slate-200 max-w-2xl leading-relaxed">
+                      <strong>Lega nazionale 100% gratuita su Fantaleghe.</strong> Compila i tuoi dati e poi consulta Privacy, Regolamento PDF e Regole Chat.
                     </p>
                   </div>
-                  <FicupLogo size="md" className="hidden sm:block shrink-0 ring-1 ring-slate-200 p-1" />
+                  <FicupLogo size="md" className="hidden sm:block bg-white p-1 shrink-0" />
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
-                    <Trophy className="w-4 h-4 text-[#C69214]" />
-                    <p className="font-bold text-[#0B1F4D]">Quota 0 €</p>
-                    <p className="text-slate-600">Lega 100% gratuita</p>
+                {/* Strip orizzontale pulita senza box pesanti */}
+                <div className="pt-4 border-t border-white/15 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs sm:text-sm">
+                  <div className="flex items-center gap-2">
+                    <Trophy className="w-4 h-4 text-[#FDE68A] shrink-0" />
+                    <span><strong>Quota 0 €</strong> gratuita</span>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
-                    <Wallet className="w-4 h-4 text-[#0284C7]" />
-                    <p className="font-bold text-[#0B1F4D] font-mono-tabular">
-                      {config.budgetIniziale} crediti
-                    </p>
-                    <p className="text-slate-600">{config.modalitaMercato}</p>
+                  <div className="flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-[#38BDF8] shrink-0" />
+                    <span className="font-mono-tabular"><strong>{config.budgetIniziale}</strong> crediti</span>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
-                    <Gavel className="w-4 h-4 text-[#0B1F4D]" />
-                    <p className="font-bold text-[#0B1F4D]">Rosa libera</p>
-                    <p className="text-slate-600">Personalizzabile</p>
+                  <div className="flex items-center gap-2">
+                    <Gavel className="w-4 h-4 text-emerald-300 shrink-0" />
+                    <span><strong>{config.modalitaMercato}</strong></span>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-1">
-                    <Sparkles className="w-4 h-4 text-[#C69214]" />
-                    <p className="font-bold text-[#0B1F4D]">Cambio nome</p>
-                    <p className="text-slate-600">Club personalizzato</p>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[#FDE68A] shrink-0" />
+                    <span><strong>Club</strong> personalizzato</span>
                   </div>
                 </div>
+              </div>
+            </section>
 
+            {/* Form a tutta larghezza su sfondo pulito */}
+            <section className="px-4 sm:px-8 py-7 sm:py-10">
+              <div className="max-w-4xl mx-auto space-y-5">
                 {step1Error && (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                  <div className="rounded-xl bg-red-50 border-l-4 border-red-600 p-4 flex items-start gap-2.5 text-sm text-red-900">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{step1Error}</span>
                   </div>
                 )}
 
                 {duplicateLocalWarning && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 flex items-start gap-2.5 text-xs sm:text-sm text-amber-950 leading-relaxed">
-                    <AlertCircle className="w-4 h-4 text-[#C69214] shrink-0 mt-0.5" />
-                    <div className="space-y-2">
-                      <p>{duplicateLocalWarning}</p>
-                      {onOpenWaitingRoom && (
-                        <button
-                          type="button"
-                          onClick={onOpenWaitingRoom}
-                          className="text-xs font-bold text-[#0284C7] underline underline-offset-2 hover:text-[#0B1F4D] cursor-pointer"
-                        >
-                          Apri subito Area Personale
-                        </button>
-                      )}
-                    </div>
+                  <div className="rounded-xl bg-amber-50 border-l-4 border-[#C69214] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm text-amber-950">
+                    <span>{duplicateLocalWarning}</span>
+                    {onOpenWaitingRoom && (
+                      <button
+                        type="button"
+                        onClick={onOpenWaitingRoom}
+                        className="text-xs font-extrabold text-[#0B1F4D] underline underline-offset-2 shrink-0 cursor-pointer"
+                      >
+                        Apri Area Personale
+                      </button>
+                    )}
                   </div>
                 )}
 
-                <form onSubmit={handleStep1Next} className="space-y-4" noValidate>
+                <form onSubmit={handleStep1Next} className="space-y-5" noValidate>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label
-                        htmlFor="ficup-nome"
-                        className="block text-xs font-semibold text-slate-700 mb-1.5"
-                      >
+                      <label htmlFor="ficup-nome" className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
                         Nome *
                       </label>
                       <input
@@ -935,10 +1029,7 @@ export function RecruitmentWizard({
                     </div>
 
                     <div>
-                      <label
-                        htmlFor="ficup-cognome"
-                        className="block text-xs font-semibold text-slate-700 mb-1.5"
-                      >
+                      <label htmlFor="ficup-cognome" className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
                         Cognome *
                       </label>
                       <input
@@ -956,15 +1047,12 @@ export function RecruitmentWizard({
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label
-                        htmlFor="ficup-email"
-                        className="block text-xs font-semibold text-slate-700"
-                      >
+                      <label htmlFor="ficup-email" className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                         Email utilizzata su Fantaleghe *
                       </label>
                       {emailValidHint && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                          <Check className="w-3 h-3" /> Formato valido
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                          <Check className="w-3.5 h-3.5" /> Valida
                         </span>
                       )}
                     </div>
@@ -978,22 +1066,19 @@ export function RecruitmentWizard({
                       placeholder="nome.cognome@esempio.it"
                       className={inputClass}
                     />
-                    <p className="mt-1 text-xs text-slate-500">
-                      L&apos;invito ufficiale su Fantaleghe e le notifiche automatiche verranno inviati a questo indirizzo.
+                    <p className="mt-1.5 text-xs text-slate-500">
+                      <strong>Importante:</strong> su questa email riceverai l&apos;invito ufficiale a Fantaleghe dopo l&apos;accettazione.
                     </p>
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label
-                        htmlFor="ficup-cellulare"
-                        className="block text-xs font-semibold text-slate-700"
-                      >
+                      <label htmlFor="ficup-cellulare" className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                         Numero di cellulare (+39) *
                       </label>
                       {phoneValidHint && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                          <Check className="w-3 h-3" /> Formato +39 valido
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                          <Check className="w-3.5 h-3.5" /> +39 valido
                         </span>
                       )}
                     </div>
@@ -1021,29 +1106,22 @@ export function RecruitmentWizard({
                         }`}
                       />
                     </div>
-                    {showInlinePhoneError && phoneValidation.error ? (
+                    {showInlinePhoneError && phoneValidation.error && (
                       <p className="mt-1.5 text-xs font-semibold text-red-700 flex items-start gap-1.5">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span>{phoneValidation.error}</span>
-                      </p>
-                    ) : (
-                      <p className="mt-1 text-xs text-slate-500 leading-relaxed">
-                        Il numero viene controllato nel formato mobile italiano (+39) prima dell&apos;invio e utilizzato per il gruppo WhatsApp ufficiale e le comunicazioni della lega.
                       </p>
                     )}
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label
-                        htmlFor="ficup-squadra"
-                        className="block text-xs font-semibold text-slate-700"
-                      >
+                      <label htmlFor="ficup-squadra" className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                         Nome della squadra proposta *
                       </label>
                       {squadValidHint && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                          <Check className="w-3 h-3" /> OK
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                          <Check className="w-3.5 h-3.5" /> OK
                         </span>
                       )}
                     </div>
@@ -1061,13 +1139,10 @@ export function RecruitmentWizard({
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label
-                        htmlFor="ficup-note"
-                        className="block text-xs font-semibold text-slate-700"
-                      >
+                      <label htmlFor="ficup-note" className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                         Note facoltative per lo staff
                       </label>
-                      <span className="font-mono-tabular text-[11px] text-slate-400">
+                      <span className="font-mono-tabular text-xs text-slate-400">
                         {note.length}/700
                       </span>
                     </div>
@@ -1077,66 +1152,67 @@ export function RecruitmentWizard({
                       maxLength={700}
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
-                      placeholder="Esperienza su Fantaleghe, disponibilità o eventuali richieste (max 700 caratteri)"
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/20 focus:border-[#0B1F4D] transition-all"
+                      placeholder="Esperienza su Fantaleghe o eventuali richieste (facoltativo)"
+                      className="w-full px-4 py-3 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/25 focus:border-[#0B1F4D] transition-all"
                     />
                   </div>
 
-                  <div className="pt-2 flex flex-col sm:flex-row justify-end gap-3">
+                  <div className="pt-3 flex justify-end">
                     <button
                       type="submit"
                       disabled={!config.iscrizioniAperte}
-                      className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                      className="min-h-[54px] w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-[#0B1F4D] hover:bg-[#153985] text-white text-sm sm:text-base font-black tracking-wide disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-2.5 cursor-pointer shadow-md"
                     >
                       <span>
                         {config.iscrizioniAperte
-                          ? 'Prosegui: Informativa Privacy'
+                          ? 'PROSEGUI: PRIVACY'
                           : 'Iscrizioni chiuse'}
                       </span>
-                      <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                      <ArrowRight className="w-5 h-5 text-[#FDE68A]" />
                     </button>
                   </div>
                 </form>
-              </motion.div>
-            )}
+              </div>
+            </section>
+          </motion.div>
+        )}
 
-            {/* STEP 2 — INFORMATIVA PRIVACY GDPR */}
-            {step === 2 && (
-              <motion.div
-                key="step-2"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                      Passaggio 2 · Tutela dei dati personali (GDPR)
-                    </p>
-                    <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                      Informativa Privacy (v{config.versioneInformativa})
-                    </h1>
+        {/* STEP 2 — PRIVACY */}
+        {step === 2 && (
+          <motion.div
+            key="step-2"
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <section className="bg-gradient-to-r from-sky-50 via-slate-50 to-white border-b border-slate-200 px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2.5 text-xs font-black uppercase tracking-[0.2em] text-[#0284C7]">
+                    <span className="font-mono-tabular text-2xl sm:text-3xl leading-none">02</span>
+                    <span>TUTELA DATI PERSONALI</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setPrivacyModalOpen(true)}
-                    className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-[#0284C7] hover:bg-slate-50 cursor-pointer"
-                  >
-                    Apri a schermo intero
-                  </button>
+                  <h1 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D]">
+                    INFORMATIVA PRIVACY (v{config.versioneInformativa})
+                  </h1>
                 </div>
 
-                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 text-xs text-amber-950 leading-relaxed">
-                  <strong>Bozza informativa GDPR:</strong> i campi indicati come{' '}
-                  <span className="font-mono-tabular font-semibold">[DA CONFERMARE]</span> sono
-                  evidenziati in attesa della validazione legale definitiva da parte del Titolare del trattamento.
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setPrivacyModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2 rounded-xl border border-[#0284C7] text-xs font-extrabold text-[#0284C7] hover:bg-sky-100/50 transition-colors cursor-pointer shrink-0"
+                >
+                  Leggi a schermo intero
+                </button>
+              </div>
+            </section>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5 max-h-72 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+            <section className="px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto space-y-5">
+                <div className="border-l-4 border-[#0284C7] pl-4 sm:pl-6 max-h-80 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
                   {GDPR_PRIVACY_SECTIONS.map((section) => (
-                    <section key={section.id} className="space-y-1">
+                    <div key={section.id} className="space-y-1">
                       <h2 className="font-bold text-[#0B1F4D]">{section.title}</h2>
                       {section.paragraphs.map((p, i) => (
                         <p key={i}>
@@ -1146,18 +1222,18 @@ export function RecruitmentWizard({
                             : p}
                         </p>
                       ))}
-                    </section>
+                    </div>
                   ))}
                 </div>
 
                 {step2Error && (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                  <div className="rounded-xl bg-red-50 border-l-4 border-red-600 p-4 flex items-start gap-2.5 text-sm text-red-900">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{step2Error}</span>
                   </div>
                 )}
 
-                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                <label className="rounded-2xl bg-slate-50 border-2 border-slate-200 p-4 sm:p-5 flex items-start gap-3.5 cursor-pointer hover:border-[#0B1F4D] transition-colors">
                   <input
                     type="checkbox"
                     checked={consensoPrivacy}
@@ -1167,10 +1243,8 @@ export function RecruitmentWizard({
                     }}
                     className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
                   />
-                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
-                    Ho letto e accetto l&apos;Informativa sul trattamento dei dati personali (versione{' '}
-                    <strong className="font-mono-tabular">{config.versioneInformativa}</strong>)
-                    per la gestione della candidatura FANTA ITALIA CUP. *
+                  <span className="text-sm font-semibold text-[#0B1F4D] leading-relaxed">
+                    Ho letto e accetto l&apos;<strong>Informativa Privacy</strong> (v{config.versioneInformativa}) per la mia candidatura. *
                   </span>
                 </label>
 
@@ -1178,132 +1252,99 @@ export function RecruitmentWizard({
                   <button
                     type="button"
                     onClick={() => setStep(1)}
-                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    className="min-h-[50px] px-6 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     Indietro
                   </button>
                   <button
                     type="button"
                     onClick={handleStep2Next}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className="min-h-[52px] px-8 py-3 rounded-2xl bg-[#0B1F4D] text-white text-sm font-black hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Prosegui: Regolamento ufficiale</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                    <span>PROSEGUI: REGOLAMENTO PDF</span>
+                    <ArrowRight className="w-4 h-4 text-[#FDE68A]" />
                   </button>
                 </div>
-              </motion.div>
-            )}
+              </div>
+            </section>
+          </motion.div>
+        )}
 
-            {/* STEP 3 — REGOLAMENTO UFFICIALE */}
-            {step === 3 && (
-              <motion.div
-                key="step-3"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                    Passaggio 3 · Regolamento ufficiale della competizione
-                  </p>
-                  <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                    Regolamento ufficiale FICUP {config.stagione}
+        {/* STEP 3 — REGOLAMENTO PDF */}
+        {step === 3 && (
+          <motion.div
+            key="step-3"
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <section className="bg-gradient-to-r from-amber-50 via-white to-amber-50/40 border-b border-slate-200 px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2.5 text-xs font-black uppercase tracking-[0.2em] text-[#C69214]">
+                    <span className="font-mono-tabular text-2xl sm:text-3xl leading-none">03</span>
+                    <span>REGOLAMENTO UFFICIALE</span>
+                  </div>
+                  <h1 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D]">
+                    REGOLAMENTO PDF · {config.stagione}
                   </h1>
                 </div>
 
+                {activeRegolamento?.contenutoTesto?.trim() ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadRegolamentoPdf}
+                    className="min-h-[48px] px-5 py-2.5 rounded-xl bg-[#D4AF37] hover:bg-[#E7C860] text-[#071436] text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer shrink-0"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>SCARICA REGOLAMENTO PDF</span>
+                  </button>
+                ) : activeRegolamento?.downloadUrl ? (
+                  <a
+                    href={activeRegolamento.downloadUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-h-[48px] px-5 py-2.5 rounded-xl bg-[#D4AF37] hover:bg-[#E7C860] text-[#071436] text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-sm shrink-0"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>APRI REGOLAMENTO PDF</span>
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto space-y-5">
+                {pdfFeedback && (
+                  <p className="text-xs sm:text-sm font-bold text-emerald-700">{pdfFeedback}</p>
+                )}
+
                 {docsLoading ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center space-y-2">
+                  <div className="py-10 text-center space-y-2">
                     <Loader2 className="w-6 h-6 animate-spin text-[#0B1F4D] mx-auto" />
-                    <p className="text-sm text-slate-600">
-                      Caricamento del Regolamento ufficiale in corso...
-                    </p>
+                    <p className="text-sm text-slate-600">Caricamento del Regolamento ufficiale...</p>
                   </div>
                 ) : activeRegolamento && activeRegolamento.contenutoTesto.trim() ? (
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
-                          <FileText className="w-5 h-5 text-[#C69214]" />
-                        </div>
-                        <div className="text-xs sm:text-sm space-y-0.5 min-w-0">
-                          <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
-                          <p className="text-slate-600 font-mono-tabular text-xs">
-                            Versione {activeRegolamento.versione} · Pubblicato:{' '}
-                            {activeRegolamento.dataPubblicazione || '—'}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleDownloadRegolamentoPdf}
-                        className="min-h-[42px] px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
-                      >
-                        <Download className="w-4 h-4 text-[#D4AF37]" />
-                        <span>Scarica PDF</span>
-                      </button>
-                    </div>
-
-                    {pdfFeedback && (
-                      <p className="text-xs font-semibold text-emerald-700">{pdfFeedback}</p>
-                    )}
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 max-h-[26rem] overflow-y-auto shadow-xs">
-                      <RegulationContentView content={activeRegolamento.contenutoTesto} />
-                    </div>
-                  </div>
-                ) : activeRegolamento && activeRegolamento.downloadUrl ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-[#0B1F4D] flex items-center justify-center shrink-0">
-                        <FileText className="w-5 h-5 text-[#C69214]" />
-                      </div>
-                      <div className="text-xs sm:text-sm space-y-0.5">
-                        <p className="font-bold text-[#0B1F4D]">{activeRegolamento.titolo}</p>
-                        <p className="text-slate-600 font-mono-tabular text-xs">
-                          Versione {activeRegolamento.versione} · Pubblicato:{' '}
-                          {activeRegolamento.dataPubblicazione || '—'}
-                        </p>
-                      </div>
-                    </div>
-                    <a
-                      href={activeRegolamento.downloadUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] inline-flex items-center justify-center gap-2 shrink-0"
-                    >
-                      <span>Apri Regolamento</span>
-                      <ExternalLink className="w-4 h-4 text-[#D4AF37]" />
-                    </a>
+                  <div className="border-l-4 border-[#D4AF37] pl-4 sm:pl-6 max-h-[26rem] overflow-y-auto">
+                    <RegulationContentView content={activeRegolamento.contenutoTesto} />
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 sm:p-5 flex items-start gap-3 text-xs sm:text-sm text-amber-950 leading-relaxed">
-                    <FileText className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <p className="font-bold text-[#0B1F4D]">
-                        Regolamento ufficiale non ancora pubblicato dallo staff
-                      </p>
-                      <p>
-                        Nessuna versione del Regolamento risulta attualmente attiva in{' '}
-                        <span className="font-mono-tabular">documenti_ufficiali</span>. Per trasparenza
-                        non viene generato alcun testo regolamentare automatico: puoi comunque
-                        completare la candidatura e consultare il regolamento appena verrà pubblicato
-                        dall&apos;Area Staff o richiesto a{' '}
-                        <span className="font-mono-tabular">{config.emailOperativa}</span>.
-                      </p>
-                    </div>
-                  </div>
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    Consulta e scarica il regolamento ufficiale tramite il link disponibile o contatta lo staff all&apos;indirizzo{' '}
+                    <strong className="font-mono-tabular text-[#0B1F4D]">{config.emailOperativa}</strong>.
+                  </p>
                 )}
 
                 {step3Error && (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                  <div className="rounded-xl bg-red-50 border-l-4 border-red-600 p-4 flex items-start gap-2.5 text-sm text-red-900">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{step3Error}</span>
                   </div>
                 )}
 
-                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                <label className="rounded-2xl bg-slate-50 border-2 border-slate-200 p-4 sm:p-5 flex items-start gap-3.5 cursor-pointer hover:border-[#0B1F4D] transition-colors">
                   <input
                     type="checkbox"
                     checked={consensoRegolamento}
@@ -1313,11 +1354,8 @@ export function RecruitmentWizard({
                     }}
                     className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
                   />
-                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
-                    Confermo di aver letto e accettato il regolamento FICUP {config.stagione}.{' '}
-                    <span className="font-mono-tabular text-xs text-slate-500">
-                      (v{regolamentoVersionLabel}) *
-                    </span>
+                  <span className="text-sm font-semibold text-[#0B1F4D] leading-relaxed">
+                    Ho letto e accetto il <strong>Regolamento ufficiale FICUP {config.stagione}</strong> (v{regolamentoVersionLabel}). *
                   </span>
                 </label>
 
@@ -1325,86 +1363,83 @@ export function RecruitmentWizard({
                   <button
                     type="button"
                     onClick={() => setStep(2)}
-                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    className="min-h-[50px] px-6 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     Indietro
                   </button>
                   <button
                     type="button"
                     onClick={handleStep3Next}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className="min-h-[52px] px-8 py-3 rounded-2xl bg-[#0B1F4D] text-white text-sm font-black hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Prosegui: Regole Chat WhatsApp</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                    <span>PROSEGUI: REGOLE CHAT</span>
+                    <ArrowRight className="w-4 h-4 text-[#FDE68A]" />
                   </button>
                 </div>
-              </motion.div>
-            )}
+              </div>
+            </section>
+          </motion.div>
+        )}
 
-            {/* STEP 4 — REGOLE UFFICIALI CHAT WHATSAPP */}
-            {step === 4 && (
-              <motion.div
-                key="step-4"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                      Passaggio 4 · Codice di comportamento della community
-                    </p>
-                    <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                      Regole Ufficiali Chat WhatsApp FICUP (v{chatRulesVersionLabel})
-                    </h1>
-                    <p className="mt-1.5 text-sm text-slate-600">
-                      Leggi attentamente le regole di comportamento del Gruppo WhatsApp Ufficiale. Il collegamento di ingresso al gruppo resta riservato e si sblocca esclusivamente al raggiungimento confermato dello stato <strong className="font-mono-tabular">COMPLETATO</strong>.
-                    </p>
+        {/* STEP 4 — REGOLE CHAT */}
+        {step === 4 && (
+          <motion.div
+            key="step-4"
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <section className="bg-gradient-to-r from-emerald-50 via-white to-emerald-50/40 border-b border-slate-200 px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2.5 text-xs font-black uppercase tracking-[0.2em] text-emerald-700">
+                    <span className="font-mono-tabular text-2xl sm:text-3xl leading-none">04</span>
+                    <span>COMMUNITY WHATSAPP</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleDownloadChatRulesPdf}
-                    className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-xs font-bold hover:bg-slate-50 inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
-                  >
-                    <Download className="w-4 h-4 text-[#C69214]" />
-                    <span>Scarica PDF</span>
-                  </button>
+                  <h1 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D]">
+                    REGOLE CHAT WHATSAPP (v{chatRulesVersionLabel})
+                  </h1>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 max-h-80 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+                <button
+                  type="button"
+                  onClick={handleDownloadChatRulesPdf}
+                  className="min-h-[46px] px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer shrink-0"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>SCARICA REGOLE CHAT PDF</span>
+                </button>
+              </div>
+            </section>
+
+            <section className="px-4 sm:px-8 py-7">
+              <div className="max-w-4xl mx-auto space-y-5">
+                <div className="border-l-4 border-emerald-600 pl-4 sm:pl-6 max-h-80 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
                   {activeChatRulesDoc && activeChatRulesDoc.contenutoTesto.trim() ? (
                     <div className="whitespace-pre-wrap">
                       {maskSensitiveWhatsappLinks(activeChatRulesDoc.contenutoTesto)}
                     </div>
                   ) : (
                     OFFICIAL_CHAT_RULES_SECTIONS.map((sec) => (
-                      <section key={sec.id} className="space-y-1">
+                      <div key={sec.id} className="space-y-1">
                         <h2 className="font-bold text-[#0B1F4D]">{sec.title}</h2>
                         {sec.paragraphs.map((p, idx) => (
                           <p key={idx}>{p}</p>
                         ))}
-                      </section>
+                      </div>
                     ))
                   )}
-
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 flex items-center gap-2">
-                    <Lock className="w-4 h-4 text-[#C69214] shrink-0" />
-                    <span>
-                      Link gruppo WhatsApp ufficiale: riservato ai candidati con pratica confermata su <span className="font-mono-tabular font-semibold">COMPLETATO</span>.
-                    </span>
-                  </div>
                 </div>
 
                 {step4Error && (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 flex items-start gap-2.5 text-sm text-red-800">
+                  <div className="rounded-xl bg-red-50 border-l-4 border-red-600 p-4 flex items-start gap-2.5 text-sm text-red-900">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{step4Error}</span>
                   </div>
                 )}
 
-                <label className="rounded-xl border border-slate-200 bg-white p-4 flex items-start gap-3 cursor-pointer hover:border-[#0B1F4D]/40 transition-colors">
+                <label className="rounded-2xl bg-slate-50 border-2 border-slate-200 p-4 sm:p-5 flex items-start gap-3.5 cursor-pointer hover:border-[#0B1F4D] transition-colors">
                   <input
                     type="checkbox"
                     checked={consensoRegoleChat}
@@ -1414,9 +1449,8 @@ export function RecruitmentWizard({
                     }}
                     className="mt-0.5 w-5 h-5 rounded border-slate-300 text-[#0B1F4D] shrink-0"
                   />
-                  <span className="text-xs sm:text-sm text-slate-800 leading-relaxed">
-                    Accetto integralmente le Regole della Chat WhatsApp Ufficiale FICUP (versione{' '}
-                    <strong className="font-mono-tabular">{chatRulesVersionLabel}</strong>) e mi impegno a rispettarle. *
+                  <span className="text-sm font-semibold text-[#0B1F4D] leading-relaxed">
+                    Accetto le <strong>Regole della Chat WhatsApp FICUP</strong> (v{chatRulesVersionLabel}) e mi impegno a rispettarle. *
                   </span>
                 </label>
 
@@ -1424,367 +1458,164 @@ export function RecruitmentWizard({
                   <button
                     type="button"
                     onClick={() => setStep(3)}
-                    className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    className="min-h-[50px] px-6 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     Indietro
                   </button>
                   <button
                     type="button"
                     onClick={handleStep4Next}
-                    className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className="min-h-[52px] px-8 py-3 rounded-2xl bg-[#0B1F4D] text-white text-sm font-black hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Prosegui: Riepilogo e Invio</span>
-                    <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                    <span>PROSEGUI: RIEPILOGO</span>
+                    <ArrowRight className="w-4 h-4 text-[#FDE68A]" />
                   </button>
                 </div>
-              </motion.div>
-            )}
+              </div>
+            </section>
+          </motion.div>
+        )}
 
-            {/* STEP 5 — RIEPILOGO, INVIO & CONFERMA PRESA IN CARICO */}
-            {step === 5 && (
-              <motion.div
-                key="step-5"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-6"
-              >
-                {submitting ? (
-                  <div className="py-12 px-4 text-center space-y-5">
-                    <motion.div
-                      animate={{ rotate: [0, 180, 180, 360] }}
-                      transition={{
-                        duration: 2.4,
-                        repeat: Infinity,
-                        ease: 'easeInOut',
-                      }}
-                      className="w-16 h-16 rounded-2xl bg-[#0B1F4D] text-[#D4AF37] border border-[#C69214]/40 shadow-md flex items-center justify-center mx-auto"
-                    >
-                      <Hourglass className="w-8 h-8" />
-                    </motion.div>
-
-                    <div className="space-y-2 max-w-md mx-auto">
-                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#C69214]">
-                        {submitStage === 'verifying'
-                          ? 'Controllo di completezza'
-                          : 'Salvataggio sicuro'}
-                      </p>
-                      <h1 className="font-display text-xl sm:text-2xl font-extrabold text-[#0B1F4D]">
-                        {submitStage === 'verifying'
-                          ? 'Verifica della candidatura in corso...'
-                          : 'Registrazione su Cloud Firestore...'}
-                      </h1>
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        {submitStage === 'verifying'
-                          ? 'Controlliamo i dati anagrafici, il numero +39 per WhatsApp e tutte le accettazioni regolamentari.'
-                          : 'Generazione del codice univoco FICUP26 e salvataggio protetto della tua richiesta.'}
-                      </p>
+        {/* STEP 5 — RIEPILOGO E INVIO (nessun gergo tecnico) */}
+        {step === 5 && (
+          <motion.div
+            key="step-5"
+            initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            {submitting ? (
+              <section className="py-16 px-4 text-center space-y-5">
+                <motion.div
+                  animate={{ rotate: [0, 180, 180, 360] }}
+                  transition={{ duration: 2.0, repeat: Infinity, ease: 'easeInOut' }}
+                  className="w-16 h-16 rounded-2xl bg-[#0B1F4D] text-[#FDE68A] flex items-center justify-center mx-auto shadow-lg"
+                >
+                  <Hourglass className="w-8 h-8" />
+                </motion.div>
+                <div className="space-y-2 max-w-md mx-auto">
+                  <h1 className="font-display text-2xl sm:text-3xl font-black text-[#0B1F4D]">
+                    {submitStage === 'verifying'
+                      ? 'Controllo dei dati...'
+                      : 'Invio della candidatura in corso...'}
+                  </h1>
+                  <p className="text-sm text-slate-600">
+                    Stiamo preparando il tuo codice personale FICUP26.
+                  </p>
+                </div>
+              </section>
+            ) : (
+              <>
+                <section className="bg-gradient-to-r from-[#071436] to-[#153985] text-white px-4 sm:px-8 py-7">
+                  <div className="max-w-4xl mx-auto space-y-1">
+                    <div className="flex items-center gap-2.5 text-xs font-black uppercase tracking-[0.2em] text-[#FDE68A]">
+                      <span className="font-mono-tabular text-2xl sm:text-3xl leading-none">05</span>
+                      <span>ULTIMO PASSAGGIO PRIMA DELL&apos;INVIO</span>
                     </div>
+                    <h1 className="font-display text-2xl sm:text-3xl font-black text-white">
+                      Controlla i tuoi dati e invia la candidatura
+                    </h1>
                   </div>
-                ) : submittedRecord ? (
-                  <div className="space-y-6">
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-11 h-11 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
-                        <CheckCircle2 className="w-6 h-6" />
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-semibold text-emerald-700">
-                          Candidatura registrata · Stato attuale:{' '}
-                          <span className="font-mono-tabular font-bold">{submittedRecord.stato}</span>
-                        </p>
-                        <h1 className="font-display text-2xl font-extrabold text-[#0B1F4D]">
-                          Candidatura ricevuta correttamente
-                        </h1>
-                        <p className="text-sm text-slate-600 leading-relaxed">
-                          La tua richiesta è stata registrata in attesa di verifica manuale da parte dello Staff FICUP. Potrai seguire ogni aggiornamento dalla tua Area Personale.
-                        </p>
-                      </div>
-                    </div>
+                </section>
 
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 text-center space-y-2.5">
-                      <p className="text-xs font-semibold text-slate-600">
-                        Il tuo codice identificativo univoco (conservalo per l&apos;Area Personale)
-                      </p>
-                      <p className="font-mono-tabular text-2xl sm:text-3xl font-bold tracking-wider text-[#0B1F4D]">
-                        {submittedRecord.codiceCandidatura}
-                      </p>
-                      <div className="pt-1 flex flex-wrap items-center justify-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleCopyCode}
-                          className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-amber-300 text-xs font-semibold text-[#0B1F4D] hover:bg-amber-100/50 transition-colors cursor-pointer"
-                        >
-                          {copiedCode ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>Codice copiato</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copia codice</span>
-                            </>
-                          )}
-                        </button>
-
-                        {onOpenWaitingRoom && (
-                          <button
-                            type="button"
-                            onClick={onOpenWaitingRoom}
-                            className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white border border-sky-300 text-xs font-semibold text-[#0284C7] hover:bg-sky-50 transition-colors cursor-pointer"
-                          >
-                            <DoorOpen className="w-3.5 h-3.5" />
-                            <span>Apri Area Personale</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 space-y-1.5">
-                      <p>
-                        <strong>Fantallenatore:</strong> {submittedRecord.nomeCompleto}
-                      </p>
-                      <p className="break-all">
-                        <strong>Email Fantaleghe:</strong> {submittedRecord.emailFantaleghe}
-                      </p>
-                      <p className="font-mono-tabular">
-                        <strong>Numero di cellulare:</strong> {submittedRecord.cellulare}
-                      </p>
-                      <p>
-                        <strong>Squadra proposta:</strong> {submittedRecord.nomeSquadra}
-                      </p>
-                      <p className="text-xs font-semibold text-[#0B1F4D] pt-1">
-                        Stato attuale:{' '}
-                        <span className="font-mono-tabular">
-                          {submittedRecord.stato} · IN ATTESA DI VERIFICA STAFF
-                        </span>
-                      </p>
-                      <p className="text-xs font-mono-tabular text-slate-500">
-                        Documenti accettati: Privacy v{config.versioneInformativa} · Regolamento v
-                        {regolamentoVersionLabel} · Regole Chat v{chatRulesVersionLabel}
-                      </p>
-                    </div>
-
-                    {acceptSyncWarning && (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-950">
-                        {acceptSyncWarning}
-                      </div>
-                    )}
-
-                    <div
-                      className={`rounded-xl border p-4 text-xs leading-relaxed space-y-2.5 ${
-                        emailDispatchState === 'emails_confirmed'
-                          ? 'border-emerald-200 bg-emerald-50/70 text-emerald-950'
-                          : emailDispatchState === 'sending'
-                            ? 'border-sky-200 bg-sky-50/70 text-[#0B1F4D]'
-                            : 'border-amber-200 bg-amber-50/70 text-amber-950'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        {emailDispatchState === 'sending' ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-[#0284C7] shrink-0 mt-0.5" />
-                        ) : emailDispatchState === 'emails_confirmed' ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-[#C69214] shrink-0 mt-0.5" />
-                        )}
-                        <div className="space-y-1">
-                          <p>
-                            <strong>Notifica email di ricezione:</strong>{' '}
-                            {emailDispatchState === 'unconfigured' ? (
-                              <>
-                                candidatura salvata su Firestore (stato{' '}
-                                <strong className="font-mono-tabular">NUOVO</strong>). Il servizio email automatico non è collegato in questo ambiente (<span className="font-mono-tabular">VITE_APPS_SCRIPT_WEBAPP_URL</span>).
-                              </>
-                            ) : emailDispatchState === 'sending' ? (
-                              <>
-                                invio della conferma di ricezione verso{' '}
-                                <span className="font-mono-tabular text-[#0B1F4D]">
-                                  {submittedRecord.emailFantaleghe}
-                                </span>{' '}
-                                e avviso allo Staff (<span className="font-mono-tabular">{config.emailOperativa}</span>) in corso...
-                              </>
-                            ) : emailDispatchState === 'emails_confirmed' ? (
-                              <>
-                                email di conferma ricezione inviata a{' '}
-                                <span className="font-mono-tabular text-[#0B1F4D]">
-                                  {submittedRecord.emailFantaleghe}
-                                </span>{' '}
-                                e notifica recapitata allo Staff (<span className="font-mono-tabular">{config.emailOperativa}</span>). Controlla anche Spam o Promozioni.
-                              </>
-                            ) : emailDispatchState === 'emails_pending' ? (
-                              <>
-                                candidatura salvata su Firestore (stato{' '}
-                                <strong className="font-mono-tabular">{submittedRecord.stato}</strong>), email di ricezione ancora in elaborazione.
-                                {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
-                              </>
-                            ) : emailDispatchState === 'forbidden_state' ? (
-                              <>
-                                notifica iniziale non necessaria per lo stato corrente (<strong className="font-mono-tabular">{submittedRecord.stato}</strong>).{emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
-                              </>
-                            ) : (
-                              <>
-                                candidatura salvata su Firestore (stato{' '}
-                                <strong className="font-mono-tabular">{submittedRecord.stato}</strong>), si è verificato un errore temporaneo durante l&apos;invio dell&apos;email di ricezione.
-                                {emailDispatchDetail ? ` (${emailDispatchDetail})` : ''}
-                              </>
-                            )}
-                          </p>
-                          {canRetryEmail &&
-                            (emailDispatchState === 'emails_pending' ||
-                              emailDispatchState === 'notification_error') &&
-                            isAppsScriptConfigured && (
-                              <button
-                                type="button"
-                                onClick={handleRetryEmailNotification}
-                                className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#0B1F4D] text-white text-xs font-bold hover:bg-[#153985] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5 text-[#D4AF37]" />
-                                <span>Riprova invio email di ricezione</span>
-                              </button>
-                            )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setStep(6)}
-                        className="min-h-[48px] w-full sm:w-auto px-6 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <span>Prosegui: Prossimi passaggi</span>
-                        <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-widest text-[#C69214]">
-                        Passaggio 5 · Riepilogo e invio
-                      </p>
-                      <h1 className="mt-1 font-display text-2xl font-extrabold text-[#0B1F4D]">
-                        Controlla i tuoi dati prima dell&apos;invio
-                      </h1>
-                      <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
-                        La tua candidatura è pronta per essere inviata. Dopo la registrazione, il nostro Staff verificherà i dati e ti comunicherà l&apos;esito.
-                      </p>
-                    </div>
-
+                <section className="px-4 sm:px-8 py-7">
+                  <div className="max-w-4xl mx-auto space-y-6">
                     {submitError && (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex items-start gap-2.5 text-sm text-red-900">
+                      <div className="rounded-xl bg-red-50 border-l-4 border-red-600 p-4 flex items-start gap-2.5 text-sm text-red-900">
                         <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                         <span>{submitError}</span>
                       </div>
                     )}
 
-                    <div className="rounded-2xl border border-slate-200 divide-y divide-slate-200 bg-white overflow-hidden">
-                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                          Dati del candidato
+                    <div className="divide-y divide-slate-200 border-y border-slate-200">
+                      <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Nome e cognome
                         </span>
-                        <span className="text-sm font-bold text-[#0B1F4D]">
+                        <span className="text-base font-bold text-[#0B1F4D]">
                           {nome.trim()} {cognome.trim()}
                         </span>
                       </div>
-                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                           Email Fantaleghe
                         </span>
-                        <span className="text-sm font-semibold text-[#0284C7] break-all">
+                        <span className="text-base font-semibold text-[#0284C7] break-all">
                           {emailFantaleghe.trim().toLowerCase()}
                         </span>
                       </div>
-                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                           Cellulare
                         </span>
-                        <span className="text-sm font-semibold font-mono-tabular text-[#0B1F4D]">
+                        <span className="text-base font-semibold font-mono-tabular text-[#0B1F4D]">
                           {cellulare.trim()}
                         </span>
                       </div>
-                      <div className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                           Squadra proposta
                         </span>
-                        <span className="text-sm font-bold text-[#0B1F4D]">
+                        <span className="text-base font-bold text-[#0B1F4D]">
                           {nomeSquadra.trim()}
                         </span>
                       </div>
                       {note.trim() && (
-                        <div className="p-4 sm:px-5 flex flex-col gap-1 bg-slate-50/50">
-                          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                            Note
+                        <div className="py-3.5 flex flex-col gap-1">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                            Note per lo staff
                           </span>
                           <span className="text-sm text-slate-700 whitespace-pre-wrap">
                             {note.trim()}
                           </span>
                         </div>
                       )}
-                      <div className="p-4 sm:px-5 space-y-1.5 bg-slate-50/70 text-xs">
-                        <p className="font-semibold uppercase tracking-wider text-slate-500">
-                          Consensi documentali
-                        </p>
-                        <p className="font-semibold text-emerald-700">
-                          ✓ Informativa Privacy GDPR (v{config.versioneInformativa})
-                        </p>
-                        <p className="font-semibold text-emerald-700">
-                          ✓ Regolamento Ufficiale FICUP (v{regolamentoVersionLabel})
-                        </p>
-                        <p className="font-semibold text-emerald-700">
-                          ✓ Regole Chat WhatsApp Ufficiale (v{chatRulesVersionLabel})
-                        </p>
+                      <div className="py-3.5 flex flex-wrap gap-x-5 gap-y-1.5 text-xs font-bold text-emerald-700">
+                        <span>✓ Privacy accettata</span>
+                        <span>✓ Regolamento PDF accettato</span>
+                        <span>✓ Regole Chat accettate</span>
                       </div>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex items-start gap-3 text-xs sm:text-sm text-slate-700">
-                      <ShieldCheck className="w-5 h-5 text-[#C69214] shrink-0 mt-0.5" />
-                      <p className="leading-relaxed">
-                        La candidatura verrà salvata in stato <strong className="font-mono-tabular text-[#0B1F4D]">NUOVO</strong>. L&apos;approvazione e il completamento avvengono esclusivamente dopo verifica manuale dello Staff FICUP.
-                      </p>
                     </div>
 
                     <div className="pt-2 flex flex-col-reverse sm:flex-row justify-between gap-3">
                       <button
                         type="button"
                         onClick={() => setStep(1)}
-                        className="min-h-[48px] px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                        className="min-h-[50px] px-6 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors cursor-pointer"
                       >
                         Modifica dati
                       </button>
                       <button
                         type="button"
                         onClick={handleRealSubmit}
-                        className="min-h-[48px] px-7 py-3 rounded-xl bg-[#0B1F4D] text-white text-sm font-extrabold tracking-wide hover:bg-[#153985] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                        className="min-h-[54px] px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-sm sm:text-base font-black tracking-wide hover:brightness-105 transition-all inline-flex items-center justify-center gap-2.5 cursor-pointer shadow-lg"
                       >
                         <span>INVIA CANDIDATURA</span>
-                        <ArrowRight className="w-4 h-4 text-[#D4AF37]" />
+                        <ArrowRight className="w-5 h-5" />
                       </button>
                     </div>
                   </div>
-                )}
-              </motion.div>
+                </section>
+              </>
             )}
+          </motion.div>
+        )}
 
-            {/* STEP 6 — CONFERMA E PROSSIMI PASSAGGI */}
-            {step === 6 && (
-              <RecruitmentStep6
-                config={config}
-                submittedRecord={submittedRecord}
-                emailDispatchState={emailDispatchState}
-                emailDispatchDetail={emailDispatchDetail}
-                isAppsScriptReady={isAppsScriptConfigured}
-                canRetryEmail={canRetryEmail}
-                onRetryEmailNotification={handleRetryEmailNotification}
-                onExitToHome={onExitToHome}
-                onOpenWaitingRoom={onOpenWaitingRoom}
-              />
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
+        {/* STEP 6 — POST-INVIO CHIARO A 3 FASI */}
+        {step === 6 && (
+          <RecruitmentStep6
+            config={config}
+            submittedRecord={submittedRecord}
+            emailDispatchState={emailDispatchState}
+            isAppsScriptReady={isAppsScriptConfigured}
+            canRetryEmail={canRetryEmail}
+            onRetryEmailNotification={handleRetryEmailNotification}
+            onExitToHome={onExitToHome}
+            onOpenWaitingRoom={onOpenWaitingRoom}
+          />
+        )}
+      </AnimatePresence>
 
       <PrivacyModal
         open={privacyModalOpen}

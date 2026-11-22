@@ -757,14 +757,54 @@ export async function updateCandidaturaByAdmin(params: {
   noteInterne: string;
   notaOperazione?: string;
   adminUser: User;
+  operazioneId?: string;
 }): Promise<void> {
   const firestore = requireDb();
   if (!params.adminUser.email) {
     throw new Error('Account amministratore privo di indirizzo email verificato.');
   }
 
+  const cleanOpId = (params.operazioneId ?? '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 128);
+
+  const cleanNota = (params.notaOperazione ?? '').trim().slice(0, 1000);
+  const isStatoCambiato = params.statoPrecedente !== params.statoNuovo;
+  const hasNotaOperazione = cleanNota.length > 0;
+
+  // 1. Verifica preventiva: se l'operazioneId esiste già nello storico
+  // (es. tentativo precedente riuscito sul server ma con ACK perso dal client)
+  let storicoAlreadyCommitted = false;
+  if (cleanOpId) {
+    try {
+      const existingSnap = await getDoc(doc(firestore, 'storico_operazioni', cleanOpId));
+      if (existingSnap.exists()) {
+        const data = existingSnap.data();
+        const matchesCandidatura = String(data.candidaturaId ?? '') === params.candidaturaId;
+        const matchesStato = String(data.statoNuovo ?? '') === params.statoNuovo;
+        const matchesNota = String(data.notaOperazione ?? '') === cleanNota;
+
+        if (!matchesCandidatura || !matchesStato || !matchesNota) {
+          throw new Error(
+            `Conflitto operazione: ID storico '${cleanOpId}' già presente con dati differenti (candidatura: ${data.candidaturaId}, stato: ${data.statoNuovo}). Operazione interrotta per sicurezza.`
+          );
+        }
+        // Il documento storico esiste già con dati identici: non riscriverlo per non violare le regole (update negato)
+        storicoAlreadyCommitted = true;
+      }
+    } catch (readErr) {
+      if (
+        readErr instanceof Error &&
+        readErr.message.includes('Conflitto operazione: ID storico')
+      ) {
+        throw readErr;
+      }
+      // Se la lettura preventiva fallisce per problemi temporanei di rete, procediamo con il tentativo di batch standard
+    }
+  }
+
   const candidaturaRef = doc(firestore, 'candidature', params.candidaturaId);
-  const storicoRef = doc(collection(firestore, 'storico_operazioni'));
   const batch = writeBatch(firestore);
 
   batch.update(candidaturaRef, {
@@ -773,13 +813,17 @@ export async function updateCandidaturaByAdmin(params: {
     updatedAt: serverTimestamp(),
   });
 
-  if (params.statoPrecedente !== params.statoNuovo || params.notaOperazione?.trim()) {
+  if (!storicoAlreadyCommitted && (isStatoCambiato || hasNotaOperazione)) {
+    const storicoRef = cleanOpId
+      ? doc(firestore, 'storico_operazioni', cleanOpId)
+      : doc(collection(firestore, 'storico_operazioni'));
+
     batch.set(storicoRef, {
       candidaturaId: params.candidaturaId,
       codiceCandidatura: params.codiceCandidatura,
       statoPrecedente: params.statoPrecedente,
       statoNuovo: params.statoNuovo,
-      notaOperazione: (params.notaOperazione ?? '').trim().slice(0, 1000),
+      notaOperazione: cleanNota,
       adminUid: params.adminUser.uid,
       adminEmail: params.adminUser.email,
       createdAt: serverTimestamp(),
@@ -789,6 +833,35 @@ export async function updateCandidaturaByAdmin(params: {
   try {
     await batch.commit();
   } catch (error) {
+    // 2. Verifica post-errore: se il commit ha fallito (es. timeout o corsa concorrente),
+    // verifichiamo se il documento storico risulta in realtà presente e coerente su Firestore
+    if (cleanOpId) {
+      try {
+        const verifySnap = await getDoc(doc(firestore, 'storico_operazioni', cleanOpId));
+        if (verifySnap.exists()) {
+          const vData = verifySnap.data();
+          const matchesCand = String(vData.candidaturaId ?? '') === params.candidaturaId;
+          const matchesStato = String(vData.statoNuovo ?? '') === params.statoNuovo;
+          const matchesNota = String(vData.notaOperazione ?? '') === cleanNota;
+
+          if (matchesCand && matchesStato && matchesNota) {
+            // L'operazione è stata già registrata e confermata su Firestore da un tentativo concorrente o precedente
+            return;
+          } else {
+            throw new Error(
+              `Conflitto operazione: documento storico '${cleanOpId}' rilevato con parametri differenti.`
+            );
+          }
+        }
+      } catch (verifyErr) {
+        if (
+          verifyErr instanceof Error &&
+          verifyErr.message.includes('Conflitto operazione:')
+        ) {
+          throw verifyErr;
+        }
+      }
+    }
     handleFirestoreError(error, OperationType.WRITE, `candidature/${params.candidaturaId}`);
   }
 }

@@ -282,30 +282,42 @@ export function parseFirestoreUiError(error: unknown): string {
     const code = (parsed.code ?? '').toLowerCase();
     const detail = parsed.error ?? raw;
     const lower = detail.toLowerCase();
+
     if (
       code === 'permission-denied' ||
+      code === 'unauthenticated' ||
       lower.includes('permission-denied') ||
+      lower.includes('unauthenticated') ||
       lower.includes('missing or insufficient permissions')
     ) {
-      return 'Permessi Firestore insufficienti o regole di sicurezza non ancora pubblicate nella Firebase Console per questo database.';
+      return 'Operazione bloccata: permessi Firestore insufficienti o sessione staff non autenticata.';
+    }
+    if (
+      code === 'unavailable' ||
+      code === 'deadline-exceeded' ||
+      code === 'aborted' ||
+      lower.includes('offline') ||
+      lower.includes('unavailable') ||
+      lower.includes('deadline-exceeded') ||
+      lower.includes('aborted') ||
+      lower.includes('timeout')
+    ) {
+      return 'Connessione temporaneamente assente o operazione scaduta (timeout Firestore/rete). Verifica la connessione e riprova.';
     }
     if (code === 'not-found' || lower.includes('not-found')) {
-      return 'Database o documento Cloud Firestore non trovato. Verifica il database ID configurato per candidature-ficup.';
+      return 'Documento o database Cloud Firestore non trovato.';
     }
     if (code === 'failed-precondition' || lower.includes('failed-precondition')) {
-      return 'Precondizione Firestore non soddisfatta (es. indice richiesto o stato istanza non valido).';
-    }
-    if (code === 'unavailable' || lower.includes('offline') || lower.includes('unavailable')) {
-      return 'Database Cloud Firestore attualmente non raggiungibile. Verifica la connessione o lo stato di attivazione del servizio su Firebase Console.';
+      return 'Precondizione Firestore non soddisfatta (es. conflitto di versione o stato).';
     }
     return detail;
   } catch {
     const lower = raw.toLowerCase();
-    if (lower.includes('permission-denied') || lower.includes('insufficient permissions')) {
-      return 'Operazione bloccata dalle regole Firestore: verifica i permessi o la pubblicazione delle regole.';
+    if (lower.includes('permission-denied') || lower.includes('insufficient permissions') || lower.includes('unauthenticated')) {
+      return 'Operazione non autorizzata o permessi Firestore insufficienti.';
     }
-    if (lower.includes('offline') || lower.includes('unavailable')) {
-      return 'Database Cloud Firestore attualmente non raggiungibile. Verifica la connessione o lo stato di attivazione del servizio su Firebase Console.';
+    if (lower.includes('offline') || lower.includes('unavailable') || lower.includes('deadline-exceeded') || lower.includes('timeout')) {
+      return 'Errore temporaneo di connessione o timeout. Riprova tra qualche istante.';
     }
     return raw;
   }

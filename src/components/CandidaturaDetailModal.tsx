@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   isAppsScriptConfigured,
   triggerCandidaturaNotification,
@@ -114,6 +114,12 @@ export function CandidaturaDetailModal({
   const [noteInterne, setNoteInterne] = useState('');
   const [notaOperazione, setNotaOperazione] = useState('');
   const [saving, setSaving] = useState(false);
+  const [notifying, setNotifying] = useState(false);
+  const [saveStatusStep, setSaveStatusStep] = useState<
+    'idle' | 'saving' | 'saved_firestore' | 'notifying' | 'notified' | 'timeout_or_error'
+  >('idle');
+  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
+  const [canRetryNotification, setCanRetryNotification] = useState(false);
   const [restoringFromModal, setRestoringFromModal] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -162,16 +168,41 @@ export function CandidaturaDetailModal({
     }
   };
 
+  const lastCandidaturaIdRef = useRef<string | null>(null);
+  const pendingOperazioneIdRef = useRef<string | null>(null);
+  const pendingOperazioneSignatureRef = useRef<string | null>(null);
+
+  const candidaturaId = candidatura?.id ?? null;
+
   useEffect(() => {
-    if (!candidatura) {
+    // Se la candidatura non è definita (modale chiuso)
+    if (!candidaturaId || !candidatura) {
+      lastCandidaturaIdRef.current = null;
+      pendingOperazioneIdRef.current = null;
+      pendingOperazioneSignatureRef.current = null;
       return;
     }
+
+    // Se l'identificativo candidatura è identico a quello già aperto (es. ri-render o onSnapshot),
+    // non azzerare il form né i riferimenti di idempotenza dell'operazione in corso.
+    if (lastCandidaturaIdRef.current === candidaturaId) {
+      return;
+    }
+
+    // Riferimento modificato: nuova candidatura selezionata o modale riaperto
+    lastCandidaturaIdRef.current = candidaturaId;
+    pendingOperazioneIdRef.current = null;
+    pendingOperazioneSignatureRef.current = null;
+
     setStatoNuovo(candidatura.stato);
     setNoteInterne(candidatura.noteInterne);
     setNotaOperazione('');
     setSaveError(null);
     setSaveSuccess(false);
     setAutoTriggerHint(null);
+    setSaveStatusStep('idle');
+    setNotificationMessage(null);
+    setCanRetryNotification(false);
     setTemplateKey(getSuggestedTemplateForState(candidatura.stato));
     setWaSaveMsg(null);
     setWaError(null);
@@ -266,7 +297,7 @@ export function CandidaturaDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [candidatura]);
+  }, [candidaturaId, candidatura]);
 
   if (!candidatura) {
     return null;
@@ -315,14 +346,103 @@ export function CandidaturaDetailModal({
     }
   };
 
+  const executeAppsScriptNotification = async (_targetState: CandidaturaStato) => {
+    setNotifying(true);
+    setSaveStatusStep('notifying');
+    setNotificationMessage(null);
+
+    let idToken: string | undefined;
+    try {
+      try {
+        idToken = await adminUser.getIdToken();
+      } catch {
+        try {
+          idToken = await adminUser.getIdToken(true);
+        } catch {
+          idToken = undefined;
+        }
+      }
+    } catch {
+      idToken = undefined;
+    }
+
+    if (!idToken) {
+      setNotificationMessage('Sessione Firebase scaduta o token non valido. Effettua nuovamente il login nell’Area Staff.');
+      setCanRetryNotification(true);
+      setSaveStatusStep('timeout_or_error');
+      setNotifying(false);
+      return;
+    }
+
+    try {
+      const res = await triggerCandidaturaNotification({
+        candidaturaId: candidatura.id,
+        idToken,
+      });
+      if (res.triggered && res.sent > 0) {
+        setAutoTriggerHint(`Email automatica elaborata dal backend Apps Script (${res.sent} invio).`);
+        setNotificationMessage(`Notifica email inviata con successo (${res.sent} invio).`);
+        setSaveStatusStep('notified');
+        setCanRetryNotification(false);
+      } else if (res.triggered) {
+        setAutoTriggerHint('Stato verificato dal backend Apps Script (nessun invio duplicato o non richiesto).');
+        setNotificationMessage('Stato verificato dal backend Apps Script.');
+        setSaveStatusStep('notified');
+        setCanRetryNotification(false);
+      } else {
+        setNotificationMessage(res.detail || 'Notifica in attesa: il trigger periodico Apps Script completerà l’invio.');
+        setSaveStatusStep('timeout_or_error');
+        setCanRetryNotification(true);
+      }
+      await refreshEmailLogs(candidatura.id);
+    } catch (gasErr) {
+      const msg = gasErr instanceof Error ? gasErr.message : String(gasErr);
+      setNotificationMessage(`Notifica temporaneamente non recapitata (${msg}). La candidatura è comunque salvata correttamente su Firestore.`);
+      setCanRetryNotification(true);
+      setSaveStatusStep('timeout_or_error');
+    } finally {
+      setNotifying(false);
+    }
+  };
+
   const handleSave = async (targetState?: CandidaturaStato, autoNote?: string) => {
+    if (saving || notifying) {
+      return;
+    }
     const nextState = targetState ?? statoNuovo;
+    const isQuickAction = autoNote !== undefined;
+
+    // Se è un'azione rapida (es. clic su 'Completato') e lo stato è già identico, non eseguire azioni ridondanti
+    if (isQuickAction && nextState === candidatura.stato) {
+      return;
+    }
+
     const operationNote = (autoNote ?? notaOperazione).trim();
+    const cleanNoteInterne = noteInterne.trim().slice(0, 2000);
+    const currentSignature = `${candidatura.id}::${nextState}::${operationNote}::${cleanNoteInterne}`;
+
+    // Identità dell'operazione:
+    // Se abbiamo già un ID pendente per la STESSA identica firma (candidatura, stato, nota, note interne),
+    // lo riutilizziamo per il retry. Se l'amministratore modifica dati, generiamo un nuovo ID univoco.
+    let operazioneId: string;
+    if (
+      pendingOperazioneIdRef.current &&
+      pendingOperazioneSignatureRef.current === currentSignature
+    ) {
+      operazioneId = pendingOperazioneIdRef.current;
+    } else {
+      operazioneId = `op_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      pendingOperazioneIdRef.current = operazioneId;
+      pendingOperazioneSignatureRef.current = currentSignature;
+    }
 
     setSaving(true);
+    setSaveStatusStep('saving');
     setSaveError(null);
     setSaveSuccess(false);
     setAutoTriggerHint(null);
+    setNotificationMessage(null);
+    setCanRetryNotification(false);
 
     try {
       await updateCandidaturaByAdmin({
@@ -330,35 +450,21 @@ export function CandidaturaDetailModal({
         codiceCandidatura: candidatura.codiceCandidatura,
         statoPrecedente: candidatura.stato,
         statoNuovo: nextState,
-        noteInterne,
+        noteInterne: cleanNoteInterne,
         notaOperazione: operationNote,
         adminUser,
+        operazioneId,
       });
+
+      // Azzera i riferimenti soltanto dopo che updateCandidaturaByAdmin ha restituito conferma positiva del commit
+      pendingOperazioneIdRef.current = null;
+      pendingOperazioneSignatureRef.current = null;
 
       setStatoNuovo(nextState);
       setNotaOperazione('');
       setSaveSuccess(true);
+      setSaveStatusStep('saved_firestore');
       setTemplateKey(getSuggestedTemplateForState(nextState));
-
-      if (isAppsScriptConfigured) {
-        let idToken: string | undefined;
-        try {
-          idToken = await adminUser.getIdToken();
-        } catch {
-          idToken = undefined;
-        }
-        const res = await triggerCandidaturaNotification({
-          candidaturaId: candidatura.id,
-          idToken,
-        });
-        if (res.triggered && res.sent > 0) {
-          setAutoTriggerHint(`Email automatica elaborata dal backend Apps Script (${res.sent} invio).`);
-        } else if (res.triggered) {
-          setAutoTriggerHint('Stato verificato dal backend Apps Script (nessun invio duplicato o non richiesto).');
-        } else {
-          setAutoTriggerHint('Stato salvato: il trigger periodico Apps Script verificherà l’eventuale notifica.');
-        }
-      }
 
       try {
         const refreshed = await fetchStoricoByCandidatura(candidatura.id);
@@ -368,11 +474,26 @@ export function CandidaturaDetailModal({
       }
 
       await refreshEmailLogs(candidatura.id);
+
+      if (isAppsScriptConfigured) {
+        await executeAppsScriptNotification(nextState);
+      }
     } catch (err) {
+      // In caso di errore, pendingOperazioneIdRef.current e pendingOperazioneSignatureRef.current
+      // vengono conservati per l'eventuale retry con gli stessi identici dati
       setSaveError(parseFirestoreUiError(err));
+      setSaveStatusStep('timeout_or_error');
     } finally {
+      // NON azzerare pendingOperazioneIdRef.current in finally
       setSaving(false);
     }
+  };
+
+  const handleRetryNotificationOnly = async () => {
+    if (saving || notifying || !isAppsScriptConfigured) {
+      return;
+    }
+    await executeAppsScriptNotification(statoNuovo);
   };
 
   const selectedWaGroupLink =
@@ -646,12 +767,52 @@ export function CandidaturaDetailModal({
               </div>
             )}
 
+            {/* Feedback durante invio notifica Apps Script */}
+            {notifying && (
+              <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 flex items-center gap-2 text-xs text-sky-900">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#0284C7]" />
+                <span>Invio notifica email in corso tramite Apps Script...</span>
+              </div>
+            )}
+
+            {/* Risultato notifica confermata */}
+            {saveStatusStep === 'notified' && notificationMessage && !notifying && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-start gap-2 text-xs text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                <span>{notificationMessage}</span>
+              </div>
+            )}
+
+            {/* Avviso errore o timeout notifica con pulsante Riprova solo invio email */}
+            {canRetryNotification && notificationMessage && !notifying && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2.5 text-xs text-amber-900">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-amber-950">Avviso notifica email</p>
+                    <p>{notificationMessage}</p>
+                  </div>
+                </div>
+                <div className="pt-0.5 flex items-center justify-end">
+                  <button
+                    type="button"
+                    disabled={saving || notifying}
+                    onClick={handleRetryNotificationOnly}
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-amber-800 hover:bg-amber-900 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shadow-xs"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Riprova solo invio email</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Quick Actions — 3 Stati Principali Semplificati */}
             <div className="space-y-2">
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || notifying}
                   onClick={() =>
                     handleSave('DA CONTATTARE', 'Pratica contrassegnata Da verificare dallo staff')
                   }
@@ -665,7 +826,7 @@ export function CandidaturaDetailModal({
                 </button>
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || notifying}
                   onClick={() => handleSave('COMPLETATO', 'Ingresso completato e verificato')}
                   className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 ${
                     simplifiedStato === 'COMPLETATO'
@@ -677,7 +838,7 @@ export function CandidaturaDetailModal({
                 </button>
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || notifying}
                   onClick={() => handleSave('RESPINTO', 'Candidatura respinta dallo staff')}
                   className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 ${
                     simplifiedStato === 'RESPINTO'
@@ -764,11 +925,11 @@ export function CandidaturaDetailModal({
             <div className="flex justify-end">
               <button
                 type="button"
-                disabled={saving}
+                disabled={saving || notifying}
                 onClick={() => handleSave()}
                 className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B1F4D] text-white text-sm font-bold hover:bg-[#153985] disabled:opacity-50 transition-colors inline-flex items-center gap-2 cursor-pointer"
               >
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {(saving || notifying) && <Loader2 className="w-4 h-4 animate-spin" />}
                 <span>Salva stato e note</span>
               </button>
             </div>

@@ -348,8 +348,9 @@ export function HomePage({
                   muted
                   playsInline
                   preload="auto"
+                  poster={HERO_FISCHIETTO_URL}
                   onError={() => setHeroVideoFailed(true)}
-                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none bg-slate-900"
+                  className="w-full max-w-[175px] sm:max-w-[270px] md:max-w-[350px] lg:max-w-[420px] xl:max-w-[450px] h-auto object-contain rounded-2xl shadow-[0_20px_50px_rgba(11,31,77,0.18)] select-none bg-transparent"
                 >
                   <source
                     src={`${import.meta.env.BASE_URL}assets/aistudio/Arbitro_muove_gli_occhi_e_a429b652_438cfe9e.mp4`}
