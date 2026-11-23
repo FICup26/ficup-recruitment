@@ -1,0 +1,32 @@
+
+name: Deploy FICUP to Firebase
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica il progetto
+        uses: actions/checkout@v4
+
+      - name: Installa Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Installa dipendenze
+        run: bun install
+
+      - name: Compila applicazione
+        run: bun run build
+
+      - name: Pubblica su Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          firebaseServiceAccount: "${{ secrets.FIREBASE_SERVICE_ACCOUNT_CANDIDATURE_FICUP }}"
+          projectId: candidature-ficup
+          target: ficup
+          channelId: live
