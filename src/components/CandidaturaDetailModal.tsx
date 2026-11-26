@@ -29,6 +29,7 @@ import {
   fetchWhatsappGruppi,
   getAdminConfig,
   resolveSimplifiedCandidaturaStato,
+  resolveTeamReservationSummary,
   saveWhatsappAutorizzazioneByAdmin,
   STATI_CANDIDATURA,
   updateCandidaturaByAdmin,
@@ -37,6 +38,7 @@ import {
   type CandidaturaStato,
   type EmailLogRecord,
   type SimplifiedCandidaturaStato,
+  type SquadraAssegnataRecord,
   type StoricoOperazioneRecord,
   type WhatsappAutorizzazioneRecord,
   type WhatsappAutorizzazioneStato,
@@ -49,11 +51,16 @@ import {
   parseFirestoreUiError,
   type NotificationTemplateKey,
 } from '../lib/notifications';
+import {
+  fetchOfficialClubs,
+  type OfficialClub,
+} from '../lib/officialFicupClient';
 
 interface CandidaturaDetailModalProps {
   candidatura: CandidaturaRecord | null;
   adminUser: User;
   operationalEmail?: string;
+  teamLock?: SquadraAssegnataRecord | null;
   onClose: () => void;
   onWhatsappAuthChanged?: () => void;
   onRestoreCandidatura?: (candidatura: CandidaturaRecord) => Promise<void>;
@@ -106,6 +113,7 @@ export function CandidaturaDetailModal({
   candidatura,
   adminUser,
   operationalEmail = FICUP_OPERATIONAL_EMAIL,
+  teamLock = null,
   onClose,
   onWhatsappAuthChanged,
   onRestoreCandidatura,
@@ -149,6 +157,7 @@ export function CandidaturaDetailModal({
   const [waSaving, setWaSaving] = useState(false);
   const [waSaveMsg, setWaSaveMsg] = useState<string | null>(null);
   const [waError, setWaError] = useState<string | null>(null);
+  const [officialClubs, setOfficialClubs] = useState<OfficialClub[]>([]);
 
   const [templateKey, setTemplateKey] = useState<NotificationTemplateKey>('APPROVAZIONE');
   const [copiedEmail, setCopiedEmail] = useState(false);
@@ -252,6 +261,16 @@ export function CandidaturaDetailModal({
         }
       });
 
+    fetchOfficialClubs()
+      .then((res) => {
+        if (!cancelled) {
+          setOfficialClubs(res.clubs);
+        }
+      })
+      .catch(() => {
+        // Non-blocking: manual input remains available
+      });
+
     fetchAccettazioneByCandidatura(candidatura.id)
       .then((acc) => {
         if (!cancelled) {
@@ -289,7 +308,22 @@ export function CandidaturaDetailModal({
           setWaStato('NON_AUTORIZZATO');
           setWaGruppoId('');
           setWaLinkAssegnato('');
-          setWaSquadraRef('');
+          const isLiberaPath =
+            candidatura.tipoCandidatura === 'LIBERA' ||
+            candidatura.nomeSquadra.trim().toUpperCase() === 'CANDIDATURA LIBERA';
+          const baseTeam = isLiberaPath
+            ? (teamLock?.nomeSquadra ?? '').trim()
+            : (
+                candidatura.squadraZonaVarNome ||
+                teamLock?.nomeSquadra ||
+                candidatura.nomeSquadra
+              ).trim();
+          const baseSerie = (candidatura.squadraZonaVarSerie || teamLock?.serie || '').trim();
+          setWaSquadraRef(
+            baseTeam
+              ? `${baseTeam}${baseSerie ? ` (${baseSerie})` : ''}`.slice(0, 120)
+              : ''
+          );
         }
       }
     });
@@ -502,6 +536,7 @@ export function CandidaturaDetailModal({
     officialConfigWaLink.trim();
 
   const simplifiedStato = resolveSimplifiedCandidaturaStato(candidatura, waAuthRecord);
+  const teamInfo = resolveTeamReservationSummary(candidatura, teamLock, waAuthRecord);
 
   const isCandidateCompleteForApproval = Boolean(
     candidatura.isCompleta ||
@@ -715,9 +750,56 @@ export function CandidaturaDetailModal({
                 </span>
               )}
             </div>
-            <div className="p-3.5 flex flex-col sm:flex-row sm:justify-between gap-1">
-              <span className="text-xs font-medium text-slate-500">Squadra attuale</span>
-              <span className="font-semibold text-slate-900">{candidatura.nomeSquadra}</span>
+            <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+              <span className="text-xs font-medium text-slate-500">Percorso candidatura</span>
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold self-start sm:self-auto ${
+                  candidatura.tipoCandidatura === 'LIBERA'
+                    ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                    : 'bg-sky-50 text-sky-900 border-sky-200'
+                }`}
+              >
+                {candidatura.tipoCandidatura === 'LIBERA'
+                  ? 'Candidatura libera (senza squadra)'
+                  : 'Subentro su squadra Zona VAR'}
+              </span>
+            </div>
+            <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+              <span className="text-xs font-medium text-slate-500">Squadra scelta (Zona VAR)</span>
+              <div className="sm:text-right">
+                <span className="font-bold text-[#0B1F4D]">
+                  {teamInfo.chosenTeam}
+                  {teamInfo.chosenSerie ? ` · ${teamInfo.chosenSerie}` : ''}
+                </span>
+                {teamInfo.chosenClubId && (
+                  <p className="font-mono-tabular text-[11px] text-slate-500">
+                    ID Club: {teamInfo.chosenClubId}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+              <span className="text-xs font-medium text-slate-500">
+                Stato prenotazione / assegnazione
+              </span>
+              <div className="flex flex-wrap items-center sm:justify-end gap-2">
+                <span
+                  className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${
+                    teamInfo.reservationStatus === 'ASSEGNATA'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : teamInfo.reservationStatus === 'RISERVATA'
+                        ? 'bg-sky-50 text-sky-900 border-sky-200'
+                        : teamInfo.reservationStatus === 'LIBERA'
+                          ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                          : teamInfo.reservationStatus === 'RILASCIATA'
+                            ? 'bg-slate-100 text-slate-600 border-slate-300'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}
+                >
+                  {teamInfo.reservationStatus}
+                </span>
+                <span className="text-xs text-slate-700">{teamInfo.detailText}</span>
+              </div>
             </div>
             <div className="p-3.5 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="text-xs font-medium text-slate-500">Data invio / Ultima modifica</span>
@@ -1043,10 +1125,32 @@ export function CandidaturaDetailModal({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Riferimento squadra (nota manuale — integrazione live Zona VAR ficup-c9186 non ancora collegata)
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-700">
+                Riferimento squadra (lettura directory ufficiale ficup-c9186 o inserimento manuale)
               </label>
+              {officialClubs.length > 0 && (
+                <select
+                  aria-label="Seleziona squadra ufficiale da ficup-c9186"
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setWaSquadraRef(e.target.value);
+                    }
+                  }}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900"
+                >
+                  <option value="">Seleziona rapidamente da club_directory/public_list ({officialClubs.length})...</option>
+                  {officialClubs.map((club) => (
+                    <option
+                      key={club.id || club.clubId || club.nome}
+                      value={`${club.nome}${club.serie ? ` (${club.serie})` : ''}`.slice(0, 120)}
+                    >
+                      {club.nome} {club.serie ? `· ${club.serie}` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
               <input
                 type="text"
                 maxLength={120}

@@ -22,21 +22,55 @@ export function buildCandidateVideoKey(
   return cleanEmail ? `${cleanCode}::${cleanEmail}` : cleanCode;
 }
 
+export interface ProvisionalWhatsappMessageOptions {
+  codiceCandidatura: string;
+  nomeCandidato?: string;
+  nomeSquadra?: string;
+  serieSquadra?: string;
+  tipoCandidatura?: 'LIBERA' | 'SUBENTRO';
+}
+
+export function buildProvisionalWhatsappText(
+  options: ProvisionalWhatsappMessageOptions
+): string {
+  const cleanCode = options.codiceCandidatura.trim().toUpperCase() || 'FICUP26';
+  const cleanName = (options.nomeCandidato ?? '').trim().replace(/\s+/g, ' ');
+  const cleanTeam = (options.nomeSquadra ?? '').trim().replace(/\s+/g, ' ');
+  const cleanSerie = (options.serieSquadra ?? '').trim().replace(/\s+/g, ' ');
+  const isLibera =
+    options.tipoCandidatura === 'LIBERA' ||
+    cleanTeam.toUpperCase() === 'CANDIDATURA LIBERA' ||
+    !cleanTeam;
+
+  const intro = cleanName
+    ? `Ciao a tutti! Sono ${cleanName} e ho appena inviato la mia candidatura per FICUP 26/27.`
+    : 'Ciao a tutti! Ho appena inviato la mia candidatura per FICUP 26/27.';
+  const teamPart = isLibera
+    ? ' Candidatura libera — nessuna squadra selezionata.'
+    : ` Squadra scelta (Zona VAR): ${cleanTeam}${cleanSerie ? ` (${cleanSerie})` : ''}.`;
+  const statusPart = ` Stato: in attesa provvisoria di verifica staff. Codice candidatura: ${cleanCode}.`;
+
+  return `${intro}${teamPart}${statusPart}`;
+}
+
 /**
  * Costruisce il link al Gruppo WhatsApp Provvisorio con messaggio precompilato
- * contenente il codice personale della candidatura, preservando eventuali parametri
- * già presenti nell'URL di invito.
+ * contenente nome candidato, conferma invio candidatura, squadra scelta dalla Zona VAR,
+ * stato provvisorio di attesa e codice personale della candidatura.
  */
 export function buildProvisionalWhatsappUrl(
   baseUrl: string,
-  codiceCandidatura: string
+  codiceOrOptions: string | ProvisionalWhatsappMessageOptions
 ): string {
   const trimmedBase = baseUrl.trim();
   if (!trimmedBase) {
     return '';
   }
-  const cleanCode = codiceCandidatura.trim().toUpperCase() || 'FICUP26';
-  const prefilledText = `Ciao a tutti! Ho appena inviato la richiesta per entrare in FICUP. Il mio codice candidatura è: ${cleanCode}.`;
+  const options: ProvisionalWhatsappMessageOptions =
+    typeof codiceOrOptions === 'string'
+      ? { codiceCandidatura: codiceOrOptions }
+      : codiceOrOptions;
+  const prefilledText = buildProvisionalWhatsappText(options);
 
   try {
     const parsed = new URL(trimmedBase);

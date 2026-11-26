@@ -1,8 +1,8 @@
-import { ArrowRight, Home, Shield, UserCheck, X } from 'lucide-react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { ArrowRight, Menu, Shield, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { FicupLogo } from './FicupLogo';
+import { setPendingOfficialTab } from './OfficialLeagueSection';
 
 export type AppView = 'home' | 'wizard' | 'waiting-room' | 'admin';
 
@@ -12,359 +12,290 @@ interface HeaderProps {
   onNavigate: (view: AppView, sectionId?: string) => void;
 }
 
-interface WebNavItem {
-  id: string;
-  num: string;
-  label: string;
-  view: AppView;
-  sectionId?: string;
-}
-
-const WEB_NAV_ITEMS: readonly WebNavItem[] = [
-  {
-    id: 'home',
-    num: '01',
-    label: 'HOME',
-    view: 'home',
-  },
-  {
-    id: 'chi-siamo',
-    num: '02',
-    label: 'CHI SIAMO',
-    view: 'home',
-    sectionId: 'la-nostra-storia',
-  },
-  {
-    id: 'super-admin',
-    num: '03',
-    label: 'SUPER ADMIN',
-    view: 'home',
-    sectionId: 'super-admin',
-  },
-  {
-    id: 'team-admin',
-    num: '04',
-    label: 'TEAM ADMIN',
-    view: 'home',
-    sectionId: 'team-admin',
-  },
-  {
-    id: 'il-fischietto',
-    num: '05',
-    label: 'IL FISCHIETTO',
-    view: 'home',
-    sectionId: 'il-fischietto',
-  },
-  {
-    id: 'competizioni',
-    num: '06',
-    label: 'COMPETIZIONI',
-    view: 'home',
-    sectionId: 'competizioni-esclusive',
-  },
-  {
-    id: 'apri-app',
-    num: '07',
-    label: 'APRI APP',
-    view: 'home',
-    sectionId: 'app-ufficiale',
-  },
-  {
-    id: 'candidature',
-    num: '08',
-    label: 'CANDIDATURE / ENTRA IN CAMPO',
-    view: 'home',
-    sectionId: 'candidatura',
-  },
-] as const;
-
 export function Header({ activeView, hasWaitingPass = false, onNavigate }: HeaderProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [selectedNavId, setSelectedNavId] = useState<string>('home');
-  const menuContainerRef = useRef<HTMLDivElement | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
-  const prefersReducedMotion = useReducedMotion();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const headerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (activeView === 'waiting-room') {
-      setSelectedNavId('waiting-room');
-    } else if (activeView === 'admin') {
-      setSelectedNavId('admin');
-    } else if (activeView === 'wizard') {
-      setSelectedNavId('wizard');
-    } else if (
-      selectedNavId === 'waiting-room' ||
-      selectedNavId === 'admin' ||
-      selectedNavId === 'wizard'
-    ) {
-      setSelectedNavId('home');
-    }
-  }, [activeView, selectedNavId]);
-
-  useEffect(() => {
-    if (!menuOpen) {
-      return;
-    }
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (!mobileMenuOpen) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setMenuOpen(false);
+        setMobileMenuOpen(false);
       }
     };
+
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
-      const clickedTrigger = menuContainerRef.current?.contains(target) ?? false;
-      const clickedDrawer = drawerRef.current?.contains(target) ?? false;
-      if (!clickedTrigger && !clickedDrawer) {
-        setMenuOpen(false);
+      if (headerRef.current && !headerRef.current.contains(target)) {
+        setMobileMenuOpen(false);
       }
     };
+
     window.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [menuOpen]);
+  }, [mobileMenuOpen]);
 
-  const handleLink = (view: AppView, sectionId?: string, navId?: string) => {
-    setMenuOpen(false);
-    if (navId) {
-      setSelectedNavId(navId);
-    } else if (view === 'home' && !sectionId) {
-      setSelectedNavId('home');
+  const handleLink = (view: AppView, sectionId?: string, officialTab?: 'classifiche' | 'zonavar') => {
+    setMobileMenuOpen(false);
+    if (officialTab) {
+      setPendingOfficialTab(officialTab);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('ficup:select-official-tab', { detail: officialTab })
+        );
+      }
     }
     onNavigate(view, sectionId);
   };
 
-  const portalDrawer =
-    typeof document !== 'undefined'
-      ? createPortal(
-          <AnimatePresence>
-            {menuOpen && (
-              <>
-                {/* Backdrop Overlay */}
-                <motion.div
-                  aria-hidden="true"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-[9998]"
-                  onClick={() => setMenuOpen(false)}
-                />
-
-                {/* Edge-Anchored Side Drawer Panel (50% viewport width, 100% viewport height) */}
-                <motion.nav
-                  ref={drawerRef}
-                  aria-label="Menu principale di navigazione"
-                  initial={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
-                  animate={prefersReducedMotion ? { opacity: 1 } : { x: 0 }}
-                  exit={prefersReducedMotion ? { opacity: 0 } : { x: '100%' }}
-                  transition={{
-                    duration: prefersReducedMotion ? 0.05 : 0.35,
-                    ease: [0.16, 1, 0.3, 1],
-                  }}
-                  className="fixed top-0 right-0 bottom-0 z-[9999] w-[50vw] h-[100dvh] rounded-none bg-[#071436] text-white border-l border-[#D4AF37]/35 shadow-2xl flex flex-col overflow-y-auto overscroll-contain pl-3.5 sm:pl-8 pr-[max(0.875rem,env(safe-area-inset-right))] sm:pr-[max(2rem,env(safe-area-inset-right))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:pt-[max(2rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-[max(2rem,env(safe-area-inset-bottom))]"
-                >
-                  <div className="flex items-center justify-between gap-2 border-b border-white/15 pb-4 mb-5 sm:mb-6">
-                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                      <FicupLogo size="sm" className="hidden sm:block bg-white p-1 rounded-xl shrink-0" />
-                      <span className="font-display text-xs sm:text-lg font-black tracking-tight text-white leading-tight break-words">
-                        FANTA ITALIA CUP
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setMenuOpen(false)}
-                      aria-label="Chiudi menu"
-                      className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-                    >
-                      <X className="w-4 h-4 sm:w-5 sm:h-5 text-[#D4AF37]" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-1.5 flex-1">
-                    {WEB_NAV_ITEMS.map((item) => {
-                      const isSelected =
-                        selectedNavId === item.id && (item.id !== 'home' || activeView === 'home');
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => handleLink(item.view, item.sectionId, item.id)}
-                          className={`group w-full text-left px-2.5 sm:px-4 py-2.5 sm:py-3 rounded-xl transition-all flex items-center justify-between gap-2 sm:gap-3 cursor-pointer ${
-                            isSelected
-                              ? 'bg-white/15 text-[#FDE68A] border border-[#D4AF37]/50 shadow-sm'
-                              : 'border border-transparent text-slate-200 hover:bg-white/[0.08] hover:text-white'
-                          }`}
-                        >
-                          <span className="flex items-center gap-2 sm:gap-3.5 min-w-0">
-                            <span
-                              className={`font-mono-tabular text-[11px] sm:text-xs font-bold shrink-0 ${
-                                isSelected ? 'text-[#FDE68A]' : 'text-[#D4AF37]'
-                              }`}
-                            >
-                              {item.num}
-                            </span>
-                            <span className="font-display text-xs sm:text-base font-bold tracking-wide leading-snug break-words">
-                              {item.label}
-                            </span>
-                          </span>
-                          <ArrowRight
-                            className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 transition-transform duration-200 group-hover:translate-x-1 ${
-                              isSelected ? 'text-[#FDE68A]' : 'text-slate-400'
-                            }`}
-                          />
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Portal Access Shortcuts & CTA at bottom */}
-                  <div className="mt-5 sm:mt-6 pt-5 sm:pt-6 border-t border-white/15 space-y-2.5 sm:space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleLink('waiting-room', undefined, 'waiting-room')}
-                        className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
-                          activeView === 'waiting-room'
-                            ? 'bg-sky-500/25 border-sky-400/60 text-white'
-                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
-                        }`}
-                      >
-                        <UserCheck className="w-4 h-4 text-sky-300 shrink-0" />
-                        <span className="text-xs sm:text-sm font-bold leading-snug break-words">
-                          {hasWaitingPass ? 'Area Personale · Pass' : 'Area Personale'}
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleLink('admin', undefined, 'admin')}
-                        className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
-                          activeView === 'admin'
-                            ? 'bg-[#D4AF37]/25 border-[#D4AF37]/60 text-white'
-                            : 'bg-white/[0.05] border-white/10 text-slate-200 hover:bg-white/[0.1]'
-                        }`}
-                      >
-                        <Shield className="w-4 h-4 text-[#D4AF37] shrink-0" />
-                        <span className="text-xs sm:text-sm font-bold leading-snug break-words">
-                          Area Staff
-                        </span>
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleLink('wizard', undefined, 'wizard')}
-                      className="w-full py-3 sm:py-3.5 px-3 sm:px-4 rounded-xl bg-gradient-to-r from-[#D4AF37] via-[#E7C860] to-[#C69214] text-[#071436] text-xs sm:text-sm font-black tracking-wide hover:brightness-105 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                    >
-                      <span>ENTRA IN CAMPO ORA</span>
-                      <ArrowRight className="w-4 h-4 shrink-0" />
-                    </button>
-                  </div>
-                </motion.nav>
-              </>
-            )}
-          </AnimatePresence>,
-          document.body
-        )
-      : null;
-
   return (
-    <>
-      <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/95 backdrop-blur-md">
-      <div className="relative max-w-7xl mx-auto px-3.5 sm:px-6 h-16 sm:h-[74px] flex items-center justify-between gap-2 sm:gap-5">
-        {/* Left: Always-Clickable FICUP Home Logo */}
+    <header
+      ref={headerRef}
+      className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/95 backdrop-blur-md"
+    >
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 h-16 sm:h-[72px] flex items-center justify-between gap-1.5 sm:gap-4 min-w-0">
+        {/* Zone 1: Brand Lockup (Official Logo + Full Brand Name + Subtitle) */}
         <button
           type="button"
-          onClick={() => handleLink('home', undefined, 'home')}
-          aria-label="Torna alla Homepage FANTA ITALIA CUP"
-          className="inline-flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 cursor-pointer min-h-[44px] group focus:outline-none text-left"
+          onClick={() => handleLink('home')}
+          className="inline-flex items-center gap-1.5 sm:gap-3 shrink min-w-0 cursor-pointer min-h-[44px] group focus:outline-none text-left"
         >
           <FicupLogo
             size="sm"
-            className="ring-1 ring-slate-200 bg-white p-0.5 transition-transform duration-300 group-hover:scale-[1.04]"
+            className="ring-1 ring-slate-200 bg-white p-0.5 transition-transform duration-300 group-hover:scale-[1.03] shrink-0"
           />
-          <span className="flex flex-col leading-none">
-            <span className="font-display text-sm sm:text-base font-extrabold tracking-tight text-[#0B1F4D] group-hover:text-[#153985] transition-colors">
+          <span className="flex flex-col leading-none min-w-0">
+            <span className="font-display text-xs sm:text-base font-extrabold tracking-tight text-[#0B1F4D] truncate">
               FANTA ITALIA CUP
             </span>
-            <span className="mt-0.5 text-[9px] sm:text-[10px] font-bold tracking-[0.16em] uppercase text-[#C69214]">
-              L&apos;universo del Fantacalcio
+            <span className="mt-0.5 text-[8px] sm:text-[10px] font-bold tracking-[0.12em] sm:tracking-[0.18em] uppercase text-[#C69214] truncate">
+              THE FOOTBALL UNIVERSE
             </span>
           </span>
         </button>
 
-        {/* Right: Uniform Primary CTA & Compact Anchored Burger Menu (zero layout shift across views) */}
-        <div ref={menuContainerRef} className="relative flex items-center gap-2 sm:gap-3 shrink-0">
+        {/* Zone 2: Desktop Center Navigation */}
+        <nav
+          aria-label="Navigazione principale"
+          className="hidden lg:flex items-center justify-center gap-2 xl:gap-5 text-xs xl:text-sm font-medium text-slate-600 min-w-0 shrink"
+        >
           <button
             type="button"
-            onClick={() => handleLink('wizard', undefined, 'wizard')}
-            className="hidden sm:inline-flex min-h-[42px] sm:min-h-[44px] px-4 sm:px-5 py-2 rounded-xl bg-[#0B1F4D] text-white text-xs sm:text-sm font-bold hover:bg-[#153985] active:scale-[0.98] transition-all whitespace-nowrap shrink-0 items-center gap-1.5 shadow-sm cursor-pointer"
+            onClick={() => handleLink('home', 'classifiche', 'classifiche')}
+            className="whitespace-nowrap shrink-0 py-1.5 border-b-2 border-transparent hover:text-[#0B1F4D] hover:border-[#C69214]/50 transition-colors cursor-pointer"
           >
-            <span>ENTRA IN CAMPO ORA</span>
-            <ArrowRight className="w-3.5 h-3.5 text-[#D4AF37]" />
+            Classifiche
           </button>
-
-          {/* Compact Website Burger Trigger */}
           <button
             type="button"
-            onClick={() => setMenuOpen((prev) => !prev)}
-            aria-expanded={menuOpen}
-            aria-label={menuOpen ? 'Chiudi menu di navigazione' : 'Apri menu di navigazione'}
-            className={`min-h-[40px] sm:min-h-[42px] px-2.5 sm:px-3 inline-flex items-center justify-center gap-1.5 rounded-xl border transition-all cursor-pointer shrink-0 ${
-              menuOpen
-                ? 'bg-[#071436] border-[#071436] text-white shadow-sm'
-                : 'bg-slate-50 border-slate-200 text-[#0B1F4D] hover:bg-slate-100 hover:border-slate-300'
+            onClick={() => handleLink('home', 'classifiche', 'zonavar')}
+            className="whitespace-nowrap shrink-0 py-1.5 border-b-2 border-transparent hover:text-[#0B1F4D] hover:border-[#0284C7]/50 transition-colors cursor-pointer"
+          >
+            Zona VAR
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLink('home', 'la-nostra-storia')}
+            className="whitespace-nowrap shrink-0 py-1.5 border-b-2 border-transparent hover:text-[#0B1F4D] hover:border-[#C69214]/50 transition-colors cursor-pointer"
+          >
+            La Storia
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLink('home', 'app-ufficiale')}
+            className="whitespace-nowrap shrink-0 py-1.5 border-b-2 border-transparent hover:text-[#0B1F4D] hover:border-[#0284C7]/50 transition-colors cursor-pointer"
+          >
+            L&apos;App
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLink('home', 'il-team')}
+            className="whitespace-nowrap shrink-0 py-1.5 border-b-2 border-transparent hover:text-[#0B1F4D] hover:border-[#C69214]/50 transition-colors cursor-pointer"
+          >
+            Il Team
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLink('waiting-room')}
+            className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+              activeView === 'waiting-room'
+                ? 'border-[#0284C7] text-[#0B1F4D] font-semibold'
+                : 'border-transparent hover:text-[#0B1F4D]'
             }`}
           >
-            <span className="hidden md:inline text-[11px] font-bold uppercase tracking-wider">
-              {menuOpen ? 'Chiudi' : 'Menu'}
-            </span>
-            {menuOpen ? (
-              <X className="w-4 h-4 sm:w-5 sm:h-5" />
-            ) : (
-              <span aria-hidden="true" className="w-4.5 sm:w-5 flex flex-col gap-[4px]">
-                <span className="block h-[2px] w-full bg-current rounded-xs" />
-                <span className="block h-[2px] w-full bg-current rounded-xs" />
-                <span className="block h-[2px] w-3.5 ml-auto bg-[#C69214] rounded-xs" />
-              </span>
+            <span>Waiting Room</span>
+            {hasWaitingPass && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" aria-hidden="true" />
             )}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLink('admin')}
+            className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer ${
+              activeView === 'admin'
+                ? 'border-[#C69214] text-[#0B1F4D] font-semibold'
+                : 'border-transparent hover:text-[#0B1F4D]'
+            }`}
+          >
+            Area Staff
+          </button>
+        </nav>
+
+        {/* Zone 3: Primary CTA + Original FICUP Burger Menu (Mobile & Desktop) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleLink('wizard')}
+            className="min-h-[40px] sm:min-h-[44px] px-2 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-[#0B1F4D] text-white text-[11px] sm:text-xs font-bold hover:bg-[#153985] active:scale-[0.98] transition-all whitespace-nowrap shrink-0 inline-flex items-center gap-1 sm:gap-1.5 shadow-sm cursor-pointer"
+          >
+            <span>Entra in campo ora</span>
+            <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#D4AF37]" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-expanded={mobileMenuOpen}
+            aria-label={mobileMenuOpen ? 'Chiudi menu' : 'Apri menu'}
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-[#0B1F4D] hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </div>
 
-      {/* Independent Sub-Bar for Home Return — zero horizontal shift on logo, CTA, or burger icon */}
-      {activeView !== 'home' && (
-        <div className="border-t border-slate-200/80 bg-slate-50/95">
-          <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-1.5 flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => handleLink('home', undefined, 'home')}
-              aria-label="Torna alla Homepage FANTA ITALIA CUP"
-              className="group inline-flex items-center gap-1.5 min-h-[34px] px-3 py-1 rounded-lg bg-white border border-slate-200/90 text-[#0B1F4D] hover:bg-[#0B1F4D] hover:text-white hover:border-[#0B1F4D] text-[11px] font-bold tracking-wider uppercase transition-colors shadow-2xs cursor-pointer"
+      {/* Right-Side Lateral Drawer (50% width, full height 100vh/100dvh) */}
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <>
+            {/* Backdrop Overlay */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setMobileMenuOpen(false)}
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50"
+              aria-hidden="true"
+            />
+            {/* Drawer Panel */}
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ duration: 0.24, ease: 'easeOut' }}
+              className="fixed top-0 right-0 z-50 h-[100dvh] h-[100vh] w-1/2 min-w-[180px] bg-white shadow-2xl flex flex-col border-l border-slate-200"
             >
-              <Home className="w-3.5 h-3.5 text-[#C69214] group-hover:text-[#FDE68A] transition-colors shrink-0" />
-              <span>HOME</span>
-            </button>
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
+                <span className="font-display text-xs sm:text-sm font-extrabold text-[#0B1F4D] truncate">
+                  MENU FICUP
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="Chiudi menu"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            <span className="text-[11px] font-semibold text-slate-500 truncate">
-              {activeView === 'wizard'
-                ? 'Candidatura guidata'
-                : activeView === 'waiting-room'
-                ? 'Area Personale'
-                : 'Area Staff'}
-            </span>
-          </div>
-        </div>
-      )}
+              <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleLink('home')}
+                  className={`w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
+                    activeView === 'home'
+                      ? 'bg-slate-100 text-[#0B1F4D] font-semibold'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Home — FANTA ITALIA CUP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('home', 'classifiche', 'classifiche')}
+                  className="w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  CLASSIFICHE UFFICIALI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('home', 'classifiche', 'zonavar')}
+                  className="w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  ZONA VAR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('home', 'la-nostra-storia')}
+                  className="w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  La nostra storia
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('home', 'app-ufficiale')}
+                  className="w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  L&apos;App Ufficiale FICUP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('home', 'il-team')}
+                  className="w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  Il Team
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('wizard')}
+                  className={`w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
+                    activeView === 'wizard'
+                      ? 'bg-amber-50 text-[#0B1F4D] font-semibold border border-[#C69214]/30'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Candidatura (7 passaggi)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('waiting-room')}
+                  className={`w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer flex items-center justify-between ${
+                    activeView === 'waiting-room'
+                      ? 'bg-sky-50 text-[#0B1F4D] font-semibold border border-[#0284C7]/30'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>Waiting Room</span>
+                  {hasWaitingPass && (
+                    <span className="text-[10px] font-mono-tabular font-semibold text-[#0284C7]">
+                      Pass attivo
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLink('admin')}
+                  className={`w-full min-h-[46px] text-left px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer inline-flex items-center gap-2 ${
+                    activeView === 'admin'
+                      ? 'bg-slate-100 text-[#0B1F4D] font-semibold'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Shield className="w-4 h-4 text-slate-500 shrink-0" />
+                  <span className="truncate">Area Staff (Admin)</span>
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </header>
-    {portalDrawer}
-    </>
   );
 }

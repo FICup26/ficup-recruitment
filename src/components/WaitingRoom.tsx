@@ -224,12 +224,16 @@ export function WaitingRoom({
         setLastCheckedAt(new Date().toISOString());
 
         if (persistLocal && onWaitingPassVerified) {
+          const isLiberaTeam =
+            data.nomeSquadra?.trim().toUpperCase() === 'CANDIDATURA LIBERA';
           onWaitingPassVerified({
             id: data.codiceCandidatura,
             codiceCandidatura: data.codiceCandidatura,
+            tipoCandidatura: isLiberaTeam ? 'LIBERA' : waitingPass?.tipoCandidatura,
             nomeCompleto: data.nomeCompleto || data.nome,
             emailFantaleghe: email.trim().toLowerCase(),
             nomeSquadra: data.nomeSquadra,
+            serieSquadra: isLiberaTeam ? undefined : waitingPass?.serieSquadra,
             submittedAtIso: data.createdAtIso || new Date().toISOString(),
             acceptedDocs: waitingPass?.acceptedDocs,
           });
@@ -272,6 +276,18 @@ export function WaitingRoom({
   const activeCode = serverStatus?.codiceCandidatura ?? waitingPass?.codiceCandidatura ?? '';
   const activeEmail = waitingPass?.emailFantaleghe ?? lookupEmail.trim().toLowerCase();
   const activeTeam = serverStatus?.nomeSquadra ?? waitingPass?.nomeSquadra ?? '';
+  const activeTipoCandidatura: 'LIBERA' | 'SUBENTRO' | undefined =
+    waitingPass?.tipoCandidatura ??
+    (activeTeam.trim().toUpperCase() === 'CANDIDATURA LIBERA' ? 'LIBERA' : undefined);
+  const activeSerie =
+    activeTipoCandidatura === 'LIBERA' ? '' : (waitingPass?.serieSquadra ?? '');
+  const displayTeamTitle =
+    activeTipoCandidatura === 'LIBERA' ||
+    activeTeam.trim().toUpperCase() === 'CANDIDATURA LIBERA'
+      ? 'Candidatura libera — nessuna squadra selezionata'
+      : activeSerie
+        ? `${activeTeam} · ${activeSerie}`
+        : activeTeam;
   const activeName = serverStatus?.nomeCompleto ?? waitingPass?.nomeCompleto ?? '';
   const firstName = activeName.trim().split(/\s+/)[0] || '';
   const activeCreatedIso = serverStatus?.createdAtIso ?? waitingPass?.submittedAtIso ?? null;
@@ -320,10 +336,13 @@ export function WaitingRoom({
 
   const provisionalBaseUrl =
     serverStatus?.linkWhatsappProvvisorio || config.linkWhatsappProvvisorio;
-  const prefilledProvisionalWaUrl = buildProvisionalWhatsappUrl(
-    provisionalBaseUrl,
-    activeCode
-  );
+  const prefilledProvisionalWaUrl = buildProvisionalWhatsappUrl(provisionalBaseUrl, {
+    codiceCandidatura: activeCode,
+    nomeCandidato: activeName,
+    nomeSquadra: activeTipoCandidatura === 'LIBERA' ? '' : activeTeam,
+    serieSquadra: activeSerie,
+    tipoCandidatura: activeTipoCandidatura,
+  });
 
   const journeyPhases = buildCandidateJourneyPhases({
     serverStatus,
@@ -551,6 +570,10 @@ export function WaitingRoom({
             variant="card"
             codiceCandidatura={activeCode}
             emailFantaleghe={activeEmail}
+            nomeCandidato={activeName}
+            nomeSquadra={activeTipoCandidatura === 'LIBERA' ? '' : activeTeam}
+            serieSquadra={activeSerie}
+            tipoCandidatura={activeTipoCandidatura}
             provisionalWhatsappUrl={provisionalBaseUrl}
             canAccessProvisionalWa={canAccessProvisionalWa}
             realState={realState}
@@ -643,7 +666,7 @@ export function WaitingRoom({
                       Riepilogo candidatura · {config.stagione}
                     </p>
                     <h2 className="font-display text-2xl font-black text-[#0B1F4D]">
-                      {activeTeam}
+                      {displayTeamTitle}
                     </h2>
                   </div>
 

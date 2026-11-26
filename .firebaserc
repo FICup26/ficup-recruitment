@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "candidature-ficup"
+  },
+  "targets": {
+    "candidature-ficup": {
+      "hosting": {
+        "ficup": [
+          "ficup"
+        ]
+      }
+    }
   }
 }

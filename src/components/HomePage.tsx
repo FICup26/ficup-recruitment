@@ -8,6 +8,7 @@ import {
   Eye,
   Flame,
   Gavel,
+  Gift,
   Globe2,
   LineChart,
   Radio,
@@ -27,6 +28,7 @@ import heroArbitroFirstFrame from '../assets/images/hero_arbitro_first_frame.jpg
 import type { FirebaseEnvironmentDiagnostics } from '../lib/firebase';
 import type { ConfigurazionePublica } from '../lib/firestore';
 import { FicupLogo } from './FicupLogo';
+import { OfficialLeagueSection } from './OfficialLeagueSection';
 import { RegulationsSection } from './RegulationsSection';
 
 interface HomePageProps {
@@ -434,6 +436,17 @@ export function HomePage({
 
                 <button
                   type="button"
+                  onClick={() => {
+                    document.getElementById('classifiche')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="min-h-[50px] px-5 py-3.5 rounded-xl border border-[#D4AF37]/60 bg-[#FFFDF6] text-[#0B1F4D] text-sm font-bold hover:bg-[#FEF8E4] hover:border-[#C69214] active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Trophy className="w-4 h-4 text-[#C69214]" />
+                  <span>Classifiche</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={onOpenWaitingRoom}
                   className="min-h-[50px] px-5 py-3.5 rounded-xl border border-slate-300 bg-white text-[#0B1F4D] text-sm font-bold hover:bg-slate-50 hover:border-[#0B1F4D]/40 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2 cursor-pointer"
                 >
@@ -496,6 +509,49 @@ export function HomePage({
               </div>
             </div>
           </motion.div>
+        </div>
+      </section>
+
+      {/* =====================================================================
+          BONUS BENVENUTO 50 FANTA CREDITI — AD BANNER DASHBOARD (PREMIUM)
+         ===================================================================== */}
+      <section className="bg-gradient-to-r from-[#071436] via-[#0B1F4D] to-[#071436] py-8 sm:py-10 border-b border-[#D4AF37]/40 text-white relative overflow-hidden shadow-xl">
+        <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#FDE68A_1px,transparent_1px)] [background-size:20px_20px]" />
+        <div className="absolute -right-20 -bottom-20 w-80 h-80 bg-[#D4AF37]/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-5 text-center md:text-left">
+            <motion.div
+              animate={{ y: [0, -6, 0], rotate: [0, 2, -2, 0] }}
+              transition={{ repeat: Infinity, duration: 2.2, ease: 'easeInOut' }}
+              className="relative shrink-0 mx-auto md:mx-0"
+            >
+              <div className="absolute -inset-2 rounded-3xl bg-gradient-to-r from-[#FDE68A] via-[#D4AF37] to-[#FDE68A] opacity-75 blur-sm animate-pulse" />
+              <div className="relative w-18 h-18 sm:w-20 sm:h-20 rounded-3xl bg-gradient-to-br from-[#1E293B] via-[#0B1F4D] to-[#071436] border-2 border-[#D4AF37] flex flex-col items-center justify-center text-[#FDE68A] shadow-2xl">
+                <Gift className="w-8 h-8 text-[#D4AF37] mb-0.5" />
+                <span className="font-display font-black text-xs tracking-tighter text-white">+50 FC</span>
+              </div>
+            </motion.div>
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-gradient-to-r from-[#D4AF37]/25 to-[#C69214]/15 border border-[#D4AF37]/40 text-[#FDE68A] text-[10px] font-black tracking-[0.18em] uppercase shadow-inner">
+                <Sparkles className="w-3 h-3 text-[#D4AF37]" />
+                <span>Bonus Benvenuto Esclusivo · Stagione {config.stagione}</span>
+              </div>
+              <h3 className="font-display text-xl sm:text-2xl font-black text-white tracking-tight">
+                50 Fanta Crediti Omaggio per la Nuova Rosa
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-200/90 max-w-2xl leading-relaxed">
+                Chi subentra in un club libero in Zona VAR riceve immediatamente un omaggio di 50 crediti extra sul budget iniziale di mercato, per costruire subito una squadra da scudetto!
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onStartWizard}
+            className="min-h-[48px] px-7 py-3 rounded-xl bg-gradient-to-r from-[#FDE68A] via-[#D4AF37] to-[#C69214] hover:from-[#fff] hover:to-[#E5C158] text-[#071436] font-display text-xs sm:text-sm font-black tracking-wider uppercase shadow-xl active:scale-98 transition-all cursor-pointer whitespace-nowrap shrink-0 border border-white/40"
+          >
+            Scegli club &amp; Riscatta bonus
+          </button>
         </div>
       </section>
 
@@ -569,6 +625,8 @@ export function HomePage({
           </div>
         </div>
       </section>
+
+      <OfficialLeagueSection />
 
       {/* =====================================================================
           4. LA NOSTRA STORIA — IL CUORE DEL PROGETTO

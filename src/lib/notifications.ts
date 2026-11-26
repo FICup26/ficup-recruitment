@@ -117,7 +117,7 @@ export function buildNotificationDraft(
   candidatura: Pick<
     CandidaturaRecord,
     'codiceCandidatura' | 'nome' | 'cognome' | 'emailFantaleghe' | 'nomeSquadra'
-  >,
+  > & { tipoCandidatura?: CandidaturaRecord['tipoCandidatura'] },
   operationalEmail: string = FICUP_OPERATIONAL_EMAIL,
   options?: {
     officialWhatsappLink?: string;
@@ -125,6 +125,12 @@ export function buildNotificationDraft(
   }
 ): PreparedEmailDraft {
   const fullName = `${candidatura.nome} ${candidatura.cognome}`.trim();
+  const isLiberaPath =
+    candidatura.tipoCandidatura === 'LIBERA' ||
+    candidatura.nomeSquadra.trim().toUpperCase() === 'CANDIDATURA LIBERA';
+  const displayTeam = isLiberaPath
+    ? 'Candidatura libera (nessuna squadra selezionata)'
+    : candidatura.nomeSquadra;
   let subject = '';
   let body = '';
   let htmlBody: string | undefined;
@@ -146,9 +152,10 @@ export function buildNotificationDraft(
         `Nuova candidatura ricevuta sul portale FICUP Recruitment.`,
         ``,
         `Codice: ${candidatura.codiceCandidatura}`,
+        `Percorso: ${isLiberaPath ? 'Candidatura libera (senza squadra)' : 'Subentro Zona VAR'}`,
         `Fantallenatore: ${fullName}`,
         `Email Fantaleghe: ${candidatura.emailFantaleghe}`,
-        `Squadra proposta: ${candidatura.nomeSquadra}`,
+        `Squadra proposta: ${displayTeam}`,
         ``,
         `Accedi al Pannello Amministrativo per verificare ed elaborare la richiesta.`,
       ].join('\n');
@@ -162,7 +169,7 @@ export function buildNotificationDraft(
         ``,
         `abbiamo ricevuto correttamente la tua candidatura per la lega nazionale gratuita FICUP.`,
         `Codice identificativo: ${candidatura.codiceCandidatura}`,
-        `Squadra indicata: ${candidatura.nomeSquadra}`,
+        `Squadra indicata: ${displayTeam}`,
         ``,
         `Il nostro staff verificherà le informazioni e ti contatterà per completare la procedura.`,
         ``,
@@ -174,11 +181,14 @@ export function buildNotificationDraft(
     case 'APPROVAZIONE': {
       label = 'Notifica approvazione e ingresso';
       subject = `FICUP — Candidatura approvata e benvenuto ufficiale (${candidatura.codiceCandidatura})`;
+      const teamSentence = isLiberaPath
+        ? `La tua candidatura libera (${candidatura.codiceCandidatura}) è stata verificata e approvata dallo staff FICUP.`
+        : `La tua candidatura (${candidatura.codiceCandidatura}) per la squadra "${displayTeam}" è stata verificata e approvata dallo staff FICUP.`;
       const lines = [
         `Ciao ${candidatura.nome},`,
         ``,
         `benvenuto ufficialmente in FICUP!`,
-        `La tua candidatura (${candidatura.codiceCandidatura}) per la squadra "${candidatura.nomeSquadra}" è stata verificata e approvata dallo staff FICUP.`,
+        teamSentence,
         `A breve riceverai l'invito ufficiale di accesso su Fantaleghe a questo indirizzo email (${candidatura.emailFantaleghe}).`,
       ];
       if (officialWaLink) {
@@ -200,7 +210,7 @@ export function buildNotificationDraft(
       htmlBody = buildApprovalHtmlEmail({
         nome: candidatura.nome,
         codiceCandidatura: candidatura.codiceCandidatura,
-        nomeSquadra: candidatura.nomeSquadra,
+        nomeSquadra: displayTeam,
         emailFantaleghe: candidatura.emailFantaleghe,
         operationalEmail,
         officialWhatsappLink: officialWaLink || undefined,
@@ -232,7 +242,9 @@ export function buildNotificationDraft(
       body = [
         `Ciao ${candidatura.nome},`,
         ``,
-        `il tuo ingresso in FICUP con la squadra "${candidatura.nomeSquadra}" è stato verificato e completato.`,
+        isLiberaPath
+          ? `il tuo ingresso in FICUP (candidatura libera) è stato verificato e completato.`
+          : `il tuo ingresso in FICUP con la squadra "${displayTeam}" è stato verificato e completato.`,
         `Ora puoi accedere al gruppo WhatsApp ufficiale della community FICUP dalla tua Area Personale.`,
         ``,
         `Buona stagione!`,

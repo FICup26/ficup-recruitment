@@ -9,6 +9,7 @@ import {
   FileText,
   Loader2,
   LogOut,
+  Megaphone,
   MessageCircle,
   RefreshCw,
   RotateCcw,
@@ -38,10 +39,12 @@ import {
   archiveCandidaturaByAdmin,
   DEFAULT_PUBLIC_CONFIG,
   fetchAmministratori,
+  fetchSquadreAssegnateMap,
   fetchWhatsappAutorizzazioniMap,
   getAdminConfig,
   isEffectiveWaAuthorized,
   resolveSimplifiedCandidaturaStato,
+  resolveTeamReservationSummary,
   restoreCandidaturaByAdmin,
   saveAdminConfig,
   subscribeCandidature,
@@ -50,9 +53,12 @@ import {
   type CandidaturaRecord,
   type ConfigurazionePublica,
   type SimplifiedCandidaturaStato,
+  type SquadraAssegnataRecord,
+  type TeamReservationBadgeStatus,
   type WhatsappAutorizzazioneRecord,
 } from '../lib/firestore';
 import { parseFirestoreUiError } from '../lib/notifications';
+import { AdminCreaInserzioneSection } from './AdminCreaInserzioneSection';
 import { AdminDocumentiSection } from './AdminDocumentiSection';
 import { AdminWhatsappSection } from './AdminWhatsappSection';
 import { AdminZonaVarSection } from './AdminZonaVarSection';
@@ -70,6 +76,7 @@ type AdminTab =
   | 'archiviate'
   | 'documenti'
   | 'zonavar'
+  | 'crea-inserzione'
   | 'whatsapp'
   | 'configurazione'
   | 'amministratori'
@@ -88,6 +95,21 @@ function formatShortDate(date: Date | null): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+function reservationBadgeStyle(status: TeamReservationBadgeStatus): string {
+  switch (status) {
+    case 'ASSEGNATA':
+      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    case 'RISERVATA':
+      return 'bg-sky-50 text-sky-900 border-sky-200';
+    case 'LIBERA':
+      return 'bg-indigo-50 text-indigo-800 border-indigo-200';
+    case 'RILASCIATA':
+      return 'bg-slate-100 text-slate-600 border-slate-300';
+    default:
+      return 'bg-amber-50 text-amber-800 border-amber-200';
+  }
 }
 
 function formatAdminDiagnosticError(err: unknown): string {
@@ -133,6 +155,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const [stateFilter, setStateFilter] = useState<CandidaturaFilter>('TUTTE');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [waAuthMap, setWaAuthMap] = useState<Record<string, WhatsappAutorizzazioneRecord>>({});
+  const [teamLocksMap, setTeamLocksMap] = useState<Record<string, SquadraAssegnataRecord>>({});
   const [archiveTarget, setArchiveTarget] = useState<CandidaturaRecord | null>(null);
   const [archiveSubmitting, setArchiveSubmitting] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -229,19 +252,25 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
   const loadWhatsappAuthMap = async () => {
     if (!adminRecord) {
       setWaAuthMap({});
+      setTeamLocksMap({});
       return;
     }
-    try {
-      const map = await fetchWhatsappAutorizzazioniMap();
-      setWaAuthMap(map);
-    } catch {
-      // Non-blocking if whatsapp_autorizzazioni rules are not yet published
+    const [waRes, locksRes] = await Promise.allSettled([
+      fetchWhatsappAutorizzazioniMap(),
+      fetchSquadreAssegnateMap(),
+    ]);
+    if (waRes.status === 'fulfilled') {
+      setWaAuthMap(waRes.value);
+    }
+    if (locksRes.status === 'fulfilled') {
+      setTeamLocksMap(locksRes.value);
     }
   };
 
   useEffect(() => {
     if (!adminRecord) {
       setWaAuthMap({});
+      setTeamLocksMap({});
       return;
     }
     loadWhatsappAuthMap();
@@ -532,6 +561,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         return true;
       }
       const assignedTeam = waAuthMap[c.id]?.squadraAssegnataZonaVar ?? '';
+      const lock = teamLocksMap[c.id];
       return (
         c.codiceCandidatura.toLowerCase().includes(q) ||
         c.nome.toLowerCase().includes(q) ||
@@ -539,10 +569,13 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         c.emailFantaleghe.toLowerCase().includes(q) ||
         c.cellulare.toLowerCase().includes(q) ||
         c.nomeSquadra.toLowerCase().includes(q) ||
+        c.squadraZonaVarNome.toLowerCase().includes(q) ||
+        c.squadraZonaVarSerie.toLowerCase().includes(q) ||
+        (lock?.serie ?? '').toLowerCase().includes(q) ||
         assignedTeam.toLowerCase().includes(q)
       );
     });
-  }, [activeCandidature, searchTerm, stateFilter, waAuthMap]);
+  }, [activeCandidature, searchTerm, stateFilter, waAuthMap, teamLocksMap]);
 
   const filteredArchivedCandidature = useMemo(() => {
     const q = archivedSearchTerm.trim().toLowerCase();
@@ -551,6 +584,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         return true;
       }
       const assignedTeam = waAuthMap[c.id]?.squadraAssegnataZonaVar ?? '';
+      const lock = teamLocksMap[c.id];
       return (
         c.codiceCandidatura.toLowerCase().includes(q) ||
         c.nome.toLowerCase().includes(q) ||
@@ -558,11 +592,14 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         c.emailFantaleghe.toLowerCase().includes(q) ||
         c.cellulare.toLowerCase().includes(q) ||
         c.nomeSquadra.toLowerCase().includes(q) ||
+        c.squadraZonaVarNome.toLowerCase().includes(q) ||
+        c.squadraZonaVarSerie.toLowerCase().includes(q) ||
+        (lock?.serie ?? '').toLowerCase().includes(q) ||
         c.archiviataByEmail.toLowerCase().includes(q) ||
         assignedTeam.toLowerCase().includes(q)
       );
     });
-  }, [archivedCandidature, archivedSearchTerm, waAuthMap]);
+  }, [archivedCandidature, archivedSearchTerm, waAuthMap, teamLocksMap]);
 
   const selectedCandidatura = useMemo(
     () => candidature.find((c) => c.id === selectedId) ?? null,
@@ -867,6 +904,18 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('crea-inserzione')}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'crea-inserzione'
+                ? 'bg-[#0B1F4D] text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Megaphone className="w-3.5 h-3.5 text-[#C69214]" />
+            <span>Crea Inserzione</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('whatsapp')}
             className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
               activeTab === 'whatsapp'
@@ -1060,7 +1109,13 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                 {/* Mobile Cards View */}
                 <div className="lg:hidden space-y-3">
                   {filteredCandidature.map((item) => {
-                    const simplifiedStato = resolveSimplifiedCandidaturaStato(item, waAuthMap[item.id]);
+                    const waAuth = waAuthMap[item.id];
+                    const simplifiedStato = resolveSimplifiedCandidaturaStato(item, waAuth);
+                    const teamInfo = resolveTeamReservationSummary(
+                      item,
+                      teamLocksMap[item.id],
+                      waAuth
+                    );
                     return (
                     <article
                       key={item.id}
@@ -1119,9 +1174,27 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                             </button>
                           )}
                         </div>
-                        <p>
-                          <strong>Squadra:</strong> {item.nomeSquadra}
-                        </p>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-2.5 space-y-1">
+                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <span className="font-semibold text-[#0B1F4D]">
+                              <strong>{item.tipoCandidatura === 'LIBERA' ? 'Percorso:' : 'Squadra scelta:'}</strong>{' '}
+                              {teamInfo.chosenTeam}
+                              {teamInfo.chosenSerie ? ` · ${teamInfo.chosenSerie}` : ''}
+                            </span>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold ${reservationBadgeStyle(
+                                teamInfo.reservationStatus
+                              )}`}
+                            >
+                              {teamInfo.reservationStatus}
+                            </span>
+                          </div>
+                          {teamInfo.assignedTeam && teamInfo.assignedTeam !== teamInfo.chosenTeam && (
+                            <p className="text-[11px] text-emerald-800 font-medium">
+                              Riferimento assegnazione: {teamInfo.assignedTeam}
+                            </p>
+                          )}
+                        </div>
                         <p className="font-mono-tabular">
                           <strong>Data:</strong> {formatShortDate(item.createdAt)}
                         </p>
@@ -1159,7 +1232,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                           <th className="py-3 px-4">Nome e cognome</th>
                           <th className="py-3 px-4">Cellulare</th>
                           <th className="py-3 px-4">Email Fantaleghe</th>
-                          <th className="py-3 px-4">Nome squadra</th>
+                          <th className="py-3 px-4">Squadra scelta · Prenotazione</th>
                           <th className="py-3 px-4">Data</th>
                           <th className="py-3 px-4">Stato</th>
                           <th className="py-3 px-4 text-right">Azioni</th>
@@ -1167,9 +1240,15 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                       </thead>
                       <tbody className="divide-y divide-slate-200 text-sm">
                         {filteredCandidature.map((item) => {
+                          const waAuth = waAuthMap[item.id];
                           const simplifiedStato = resolveSimplifiedCandidaturaStato(
                             item,
-                            waAuthMap[item.id]
+                            waAuth
+                          );
+                          const teamInfo = resolveTeamReservationSummary(
+                            item,
+                            teamLocksMap[item.id],
+                            waAuth
                           );
                           return (
                           <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1205,7 +1284,42 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                             <td className="py-3 px-4 text-slate-600 break-all">
                               {item.emailFantaleghe}
                             </td>
-                            <td className="py-3 px-4 text-slate-800">{item.nomeSquadra}</td>
+                            <td className="py-3 px-4">
+                              <div className="space-y-1">
+                                <p className="font-semibold text-[#0B1F4D]">
+                                  {teamInfo.chosenTeam}
+                                  {teamInfo.chosenSerie && (
+                                    <span className="ml-1.5 text-xs font-normal text-slate-500">
+                                      ({teamInfo.chosenSerie})
+                                    </span>
+                                  )}
+                                </p>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold ${
+                                      item.tipoCandidatura === 'LIBERA'
+                                        ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                        : 'bg-sky-50 text-sky-900 border-sky-200'
+                                    }`}
+                                  >
+                                    {item.tipoCandidatura === 'LIBERA' ? 'CANDIDATURA LIBERA' : 'SUBENTRO'}
+                                  </span>
+                                  <span
+                                    className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold ${reservationBadgeStyle(
+                                      teamInfo.reservationStatus
+                                    )}`}
+                                  >
+                                    {teamInfo.reservationStatus}
+                                  </span>
+                                  {teamInfo.assignedTeam &&
+                                    teamInfo.assignedTeam !== teamInfo.chosenTeam && (
+                                      <span className="text-[11px] text-emerald-800 font-medium">
+                                        Assegnata: {teamInfo.assignedTeam}
+                                      </span>
+                                    )}
+                                </div>
+                              </div>
+                            </td>
                             <td className="py-3 px-4 font-mono-tabular text-xs text-slate-600 whitespace-nowrap">
                               {formatShortDate(item.createdAt)}
                             </td>
@@ -1322,9 +1436,12 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                 {/* Mobile Archived Cards */}
                 <div className="lg:hidden space-y-3">
                   {filteredArchivedCandidature.map((item) => {
-                    const simplifiedStato = resolveSimplifiedCandidaturaStato(
+                    const waAuth = waAuthMap[item.id];
+                    const simplifiedStato = resolveSimplifiedCandidaturaStato(item, waAuth);
+                    const teamInfo = resolveTeamReservationSummary(
                       item,
-                      waAuthMap[item.id]
+                      teamLocksMap[item.id],
+                      waAuth
                     );
                     const isRestoring = restoringId === item.id;
                     return (
@@ -1355,7 +1472,15 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                             <strong>Email:</strong> {item.emailFantaleghe}
                           </p>
                           <p>
-                            <strong>Squadra:</strong> {item.nomeSquadra}
+                            <strong>Squadra scelta:</strong> {teamInfo.chosenTeam}
+                            {teamInfo.chosenSerie ? ` · ${teamInfo.chosenSerie}` : ''} ·{' '}
+                            <span
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${reservationBadgeStyle(
+                                teamInfo.reservationStatus
+                              )}`}
+                            >
+                              {teamInfo.reservationStatus}
+                            </span>
                           </p>
                           <p>
                             <strong>Archiviata da:</strong> {item.archiviataByEmail || '—'}
@@ -1409,9 +1534,15 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                       </thead>
                       <tbody className="divide-y divide-slate-200 text-sm">
                         {filteredArchivedCandidature.map((item) => {
+                          const waAuth = waAuthMap[item.id];
                           const simplifiedStato = resolveSimplifiedCandidaturaStato(
                             item,
-                            waAuthMap[item.id]
+                            waAuth
+                          );
+                          const teamInfo = resolveTeamReservationSummary(
+                            item,
+                            teamLocksMap[item.id],
+                            waAuth
                           );
                           const isRestoring = restoringId === item.id;
                           return (
@@ -1427,7 +1558,23 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
                                   {item.emailFantaleghe}
                                 </p>
                               </td>
-                              <td className="py-3 px-4 text-slate-800">{item.nomeSquadra}</td>
+                              <td className="py-3 px-4 text-slate-800">
+                                <p className="font-semibold text-[#0B1F4D]">
+                                  {teamInfo.chosenTeam}
+                                  {teamInfo.chosenSerie && (
+                                    <span className="ml-1.5 text-xs font-normal text-slate-500">
+                                      ({teamInfo.chosenSerie})
+                                    </span>
+                                  )}
+                                </p>
+                                <span
+                                  className={`mt-1 inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-bold ${reservationBadgeStyle(
+                                    teamInfo.reservationStatus
+                                  )}`}
+                                >
+                                  {teamInfo.reservationStatus}
+                                </span>
+                              </td>
                               <td className="py-3 px-4 whitespace-nowrap">
                                 <span
                                   className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-bold ${simplifiedStatusBadgeStyle(
@@ -1484,6 +1631,9 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
 
         {/* TAB: SQUADRE ZONA VAR */}
         {activeTab === 'zonavar' && <AdminZonaVarSection />}
+
+        {/* TAB: CREA INSERZIONE */}
+        {activeTab === 'crea-inserzione' && <AdminCreaInserzioneSection />}
 
         {/* TAB: ACCESSI WHATSAPP */}
         {activeTab === 'whatsapp' && (
@@ -1843,6 +1993,7 @@ export function AdminPanel({ publicConfig, onConfigSaved }: AdminPanelProps) {
         candidatura={selectedCandidatura}
         adminUser={user}
         operationalEmail={publicConfig.emailOperativa}
+        teamLock={selectedCandidatura ? (teamLocksMap[selectedCandidatura.id] ?? null) : null}
         onClose={() => setSelectedId(null)}
         onWhatsappAuthChanged={loadWhatsappAuthMap}
         onRestoreCandidatura={handleRestoreCandidatura}

@@ -9,10 +9,12 @@ export interface WaitingRoomAcceptedDocs {
 export interface WaitingRoomPass {
   id: string;
   codiceCandidatura: string;
+  tipoCandidatura?: 'LIBERA' | 'SUBENTRO';
   nomeCompleto: string;
   emailFantaleghe: string;
   cellulare?: string;
   nomeSquadra: string;
+  serieSquadra?: string;
   submittedAtIso: string;
   acceptedDocs?: WaitingRoomAcceptedDocs;
 }
@@ -45,6 +47,12 @@ export function loadWaitingRoomPass(): WaitingRoomPass | null {
         nomeSquadra: parsed.nomeSquadra,
         submittedAtIso: parsed.submittedAtIso,
       };
+      if (parsed.tipoCandidatura === 'LIBERA' || parsed.tipoCandidatura === 'SUBENTRO') {
+        result.tipoCandidatura = parsed.tipoCandidatura;
+      }
+      if (typeof parsed.serieSquadra === 'string' && parsed.serieSquadra.trim()) {
+        result.serieSquadra = parsed.serieSquadra.trim();
+      }
       if (typeof parsed.cellulare === 'string' && parsed.cellulare.trim()) {
         result.cellulare = parsed.cellulare;
       }

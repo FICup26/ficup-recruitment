@@ -12,9 +12,13 @@ export default defineConfig(({mode}) => {
     process.env.VITE_APPS_SCRIPT_WEBAPP_URL ||
     process.env.APPS_SCRIPT_WEBAPP_URL ||
     '';
+  const explicitBase = env.VITE_BASE_PATH || process.env.VITE_BASE_PATH || '';
+  const isGithubPages = process.env.GITHUB_ACTIONS === 'true';
+  const base =
+    explicitBase || (mode === 'production' && isGithubPages ? '/ficup-recruitment/' : '/');
 
   return {
-    base: mode === 'production' ? '/ficup-recruitment/' : '/',
+    base,
     define: {
       'import.meta.env.VITE_APPS_SCRIPT_WEBAPP_URL': JSON.stringify(appsScriptUrl),
     },

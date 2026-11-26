@@ -512,6 +512,55 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidSquadraBloccataPortale(data) {
+      return data.keys().hasAll([
+          'lockId',
+          'clubId',
+          'normalizedKey',
+          'nomeSquadra',
+          'serie',
+          'serieKey',
+          'motivo',
+          'bloccata',
+          'bloccataDaUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'lockId',
+          'clubId',
+          'normalizedKey',
+          'nomeSquadra',
+          'serie',
+          'serieKey',
+          'motivo',
+          'bloccata',
+          'bloccataDaUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.lockId) &&
+        data.clubId is string &&
+        data.clubId.size() <= 128 &&
+        data.normalizedKey is string &&
+        data.normalizedKey.size() <= 128 &&
+        data.nomeSquadra is string &&
+        data.nomeSquadra.size() >= 1 &&
+        data.nomeSquadra.size() <= 120 &&
+        data.serie is string &&
+        data.serie.size() <= 60 &&
+        data.serieKey is string &&
+        data.serieKey.size() <= 40 &&
+        data.motivo is string &&
+        data.motivo.size() <= 300 &&
+        data.bloccata is bool &&
+        data.bloccataDaUid is string &&
+        data.bloccataDaUid.size() >= 1 &&
+        data.bloccataDaUid.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection Rules
     // -------------------------------------------------------------------------
@@ -751,6 +800,40 @@ service cloud.firestore {
         incoming().updatedAt == request.time;
 
       allow delete: if false;
+    }
+
+    // Prenotazioni atomiche squadre Zona VAR: scritte esclusivamente lato backend (Admin SDK);
+    // lettura riservata agli amministratori autorizzati, nessuna scrittura dal client.
+    match /squadre_assegnate/{lockId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // Blocchi manuali squadre Zona VAR gestiti dallo Staff del portale:
+    // lettura pubblica consentita (solo riferimenti squadra, zero dati personali)
+    // per nascondere le squadre gia occupate dal selettore utenti;
+    // scrittura ed eliminazione riservate esclusivamente agli amministratori.
+    match /squadre_bloccate_portale/{lockId} {
+      allow get, list: if true;
+
+      allow create: if isAdmin() &&
+        isValidId(lockId) &&
+        isValidSquadraBloccataPortale(incoming()) &&
+        incoming().lockId == lockId &&
+        incoming().bloccata == true &&
+        incoming().bloccataDaUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidId(lockId) &&
+        isValidSquadraBloccataPortale(incoming()) &&
+        incoming().lockId == lockId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().bloccataDaUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(lockId);
     }
   }
 }

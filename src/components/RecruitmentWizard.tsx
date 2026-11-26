@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   Gavel,
+  Gift,
   Hourglass,
   Loader2,
   Lock,
@@ -18,6 +19,7 @@ import {
   Phone,
   Play,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   Sparkles,
@@ -26,7 +28,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   isAppsScriptConfigured,
   triggerCandidaturaNotification,
@@ -36,13 +38,20 @@ import { isFirebaseConfigured } from '../lib/firebase';
 import {
   fetchActivePublicDocument,
   normalizeAndValidateItalianPhone,
-  saveAccettazioneDocumentale,
-  submitCandidatura,
   validateCandidaturaInput,
   type CandidaturaStato,
   type ConfigurazionePublica,
   type DocumentoUfficialeRecord,
 } from '../lib/firestore';
+import {
+  fetchAvailableTeams,
+  OfficialBridgeError,
+  SERIE_LABELS,
+  submitCandidaturaWithOfficialTeam,
+  type AllowedSerieKey,
+  type AvailableTeamDto,
+  type AvailableTeamsResponse,
+} from '../lib/officialFicupClient';
 import {
   buildProvisionalWhatsappUrl,
   isProvisionalWhatsappUnlockedByVideo,
@@ -91,9 +100,11 @@ export type WizardEmailDispatchState =
 export interface SubmittedWizardRecord {
   id: string;
   codiceCandidatura: string;
+  tipoCandidatura?: 'LIBERA' | 'SUBENTRO';
   emailFantaleghe: string;
   cellulare: string;
   nomeSquadra: string;
+  serieSquadra?: string;
   nomeCompleto: string;
   note?: string;
   submittedAtIso: string;
@@ -161,10 +172,19 @@ export function RecruitmentStep6({
     }
   };
 
-  const prefilledWhatsappLink = buildProvisionalWhatsappUrl(
-    config.linkWhatsappProvvisorio,
-    codiceCandidatura
-  );
+  const nomeCandidato = submittedRecord?.nomeCompleto ?? '';
+  const tipoCandidatura = submittedRecord?.tipoCandidatura;
+  const nomeSquadra =
+    tipoCandidatura === 'LIBERA' ? '' : (submittedRecord?.nomeSquadra ?? '');
+  const serieSquadra =
+    tipoCandidatura === 'LIBERA' ? '' : (submittedRecord?.serieSquadra ?? '');
+  const prefilledWhatsappLink = buildProvisionalWhatsappUrl(config.linkWhatsappProvvisorio, {
+    codiceCandidatura,
+    nomeCandidato,
+    nomeSquadra,
+    serieSquadra,
+    tipoCandidatura,
+  });
 
   return (
     <motion.div
@@ -294,6 +314,10 @@ export function RecruitmentStep6({
               variant="phase1"
               codiceCandidatura={codiceCandidatura}
               emailFantaleghe={emailFantaleghe}
+              nomeCandidato={nomeCandidato}
+              nomeSquadra={nomeSquadra}
+              serieSquadra={serieSquadra}
+              tipoCandidatura={tipoCandidatura}
               provisionalWhatsappUrl={config.linkWhatsappProvvisorio}
               canAccessProvisionalWa={true}
               realState={submittedRecord?.stato ?? 'NUOVO'}
@@ -484,13 +508,19 @@ export function RecruitmentWizard({
   const [activeRegolamento, setActiveRegolamento] = useState<DocumentoUfficialeRecord | null>(null);
   const [activeChatRulesDoc, setActiveChatRulesDoc] = useState<DocumentoUfficialeRecord | null>(null);
 
-  // Step 1 Form
+  // Step 1 Form & Selettore Squadre Libere Zona VAR
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
   const [emailFantaleghe, setEmailFantaleghe] = useState('');
   const [cellulare, setCellulare] = useState('');
   const [phoneTouched, setPhoneTouched] = useState(false);
-  const [nomeSquadra, setNomeSquadra] = useState('');
+  const [tipoCandidatura, setTipoCandidatura] = useState<'' | 'SUBENTRO' | 'LIBERA'>('');
+  const [selectedTeam, setSelectedTeam] = useState<AvailableTeamDto | null>(null);
+  const [teamSearch, setTeamSearch] = useState('');
+  const [teamSerieFilter, setTeamSerieFilter] = useState<'TUTTE' | AllowedSerieKey>('TUTTE');
+  const [availableTeamsData, setAvailableTeamsData] = useState<AvailableTeamsResponse | null>(null);
+  const [teamsLoading, setTeamsLoading] = useState(false);
+  const [teamsError, setTeamsError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [step1Error, setStep1Error] = useState<string | null>(null);
   const [duplicateLocalWarning, setDuplicateLocalWarning] = useState<string | null>(null);
@@ -513,6 +543,55 @@ export function RecruitmentWizard({
   const [submittedRecord, setSubmittedRecord] = useState<SubmittedWizardRecord | null>(null);
   const [emailDispatchState, setEmailDispatchState] = useState<WizardEmailDispatchState>('idle');
   const [canRetryEmail, setCanRetryEmail] = useState(false);
+
+  const loadAvailableTeams = useCallback(async (forceRefresh = false) => {
+    setTeamsLoading(true);
+    setTeamsError(null);
+    try {
+      const res = await fetchAvailableTeams(forceRefresh);
+      setAvailableTeamsData(res);
+      setSelectedTeam((prev) => {
+        if (!prev) return null;
+        const stillFree = res.teams.find(
+          (t) =>
+            t.serieKey === prev.serieKey &&
+            (t.clubId === prev.clubId || t.id === prev.id || t.normalizedKey === prev.normalizedKey)
+        );
+        return stillFree ?? null;
+      });
+    } catch (err) {
+      // Fail-closed: non mostrare mai squadre obsolete o simulate se il bridge fallisce
+      setAvailableTeamsData(null);
+      setSelectedTeam(null);
+      if (err instanceof OfficialBridgeError) {
+        setTeamsError(err.message);
+      } else {
+        setTeamsError(
+          'Impossibile verificare le squadre libere nella Zona VAR ufficiale. Riprova tra qualche istante.'
+        );
+      }
+    } finally {
+      setTeamsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAvailableTeams(false);
+  }, [loadAvailableTeams]);
+
+  const hasAvailableRedTeams = useMemo(() => {
+    if (!availableTeamsData) return true;
+    return availableTeamsData.teams.some(
+      (t) => (t.sportCategory ?? 'REGOLARE') === 'ALLARME_ROSSO' && t.availabilityStatus === 'LIBERA'
+    );
+  }, [availableTeamsData]);
+
+  useEffect(() => {
+    if (tipoCandidatura === 'SUBENTRO' && availableTeamsData && !hasAvailableRedTeams) {
+      setTipoCandidatura('LIBERA');
+      setSelectedTeam(null);
+    }
+  }, [tipoCandidatura, availableTeamsData, hasAvailableRedTeams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -554,6 +633,24 @@ export function RecruitmentWizard({
     }
   }, [emailFantaleghe]);
 
+  const filteredAvailableTeams = useMemo(() => {
+    const list = availableTeamsData?.teams ?? [];
+    const q = teamSearch.trim().toLowerCase();
+    return list.filter((team) => {
+      if (teamSerieFilter !== 'TUTTE' && team.serieKey !== teamSerieFilter) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      return (
+        team.nome.toLowerCase().includes(q) ||
+        team.nomeClub.toLowerCase().includes(q) ||
+        team.serie.toLowerCase().includes(q)
+      );
+    });
+  }, [availableTeamsData, teamSearch, teamSerieFilter]);
+
   const progressPercent = Math.round((step / STEP_META.length) * 100);
   const isSubmitted = submittedRecord !== null;
   const emailValidHint =
@@ -578,7 +675,11 @@ export function RecruitmentWizard({
   const showInlinePhoneError =
     Boolean(phoneValidation.error) &&
     (phoneTouched || Boolean(step1Error) || cellulare.replace(/\D/g, '').length >= 9);
-  const squadValidHint = nomeSquadra.trim().length >= 2;
+  const squadValidHint =
+    tipoCandidatura === 'LIBERA' ||
+    (tipoCandidatura === 'SUBENTRO' &&
+      selectedTeam !== null &&
+      selectedTeam.availabilityStatus === 'LIBERA');
 
   const regolamentoVersionLabel = activeRegolamento?.versione || REGOLAMENTO_FALLBACK_VERSION;
   const regolamentoDocIdLabel = activeRegolamento?.id || 'in_attesa_pubblicazione';
@@ -589,12 +690,24 @@ export function RecruitmentWizard({
     setStep1Error(null);
     setPhoneTouched(true);
     try {
+      if (!tipoCandidatura) {
+        throw new Error(
+          'Indica se desideri subentrare in una squadra disponibile oppure inviare una candidatura senza squadra.'
+        );
+      }
+      if (tipoCandidatura === 'SUBENTRO' && (!selectedTeam || selectedTeam.availabilityStatus !== 'LIBERA')) {
+        throw new Error(
+          'Seleziona una squadra libera dalla sezione Zona VAR prima di proseguire.'
+        );
+      }
       const validated = validateCandidaturaInput({
         nome,
         cognome,
         emailFantaleghe,
         cellulare,
-        nomeSquadra,
+        tipoCandidatura,
+        nomeSquadra: tipoCandidatura === 'LIBERA' ? 'CANDIDATURA LIBERA' : selectedTeam!.nome,
+        selectedTeam: tipoCandidatura === 'LIBERA' ? null : selectedTeam,
         note,
         consensoPrivacy: true,
         versioneInformativa: config.versioneInformativa,
@@ -644,6 +757,19 @@ export function RecruitmentWizard({
       setSubmitError('Servizio momentaneamente non disponibile.');
       return;
     }
+    if (!tipoCandidatura) {
+      setSubmitError('Seleziona il percorso di candidatura nel passaggio 1.');
+      setStep(1);
+      return;
+    }
+    if (
+      tipoCandidatura === 'SUBENTRO' &&
+      (!selectedTeam || selectedTeam.availabilityStatus !== 'LIBERA')
+    ) {
+      setSubmitError('Seleziona una squadra libera dalla Zona VAR prima di inviare.');
+      setStep(1);
+      return;
+    }
     if (!consensoPrivacy || !consensoRegolamento || !consensoRegoleChat) {
       setSubmitError('Completa tutte le accettazioni obbligatorie prima di inviare.');
       return;
@@ -657,7 +783,9 @@ export function RecruitmentWizard({
         cognome,
         emailFantaleghe,
         cellulare,
-        nomeSquadra,
+        tipoCandidatura,
+        nomeSquadra: tipoCandidatura === 'LIBERA' ? 'CANDIDATURA LIBERA' : selectedTeam!.nome,
+        selectedTeam: tipoCandidatura === 'LIBERA' ? null : selectedTeam,
         note,
         consensoPrivacy,
         versioneInformativa: config.versioneInformativa,
@@ -665,39 +793,51 @@ export function RecruitmentWizard({
         regolamentoVersione: regolamentoVersionLabel,
       });
 
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 1400);
-      });
-
       setSubmitStage('saving');
-      const result = await submitCandidatura(clean);
+      const result = await submitCandidaturaWithOfficialTeam({
+        nome: clean.nome,
+        cognome: clean.cognome,
+        emailFantaleghe: clean.emailFantaleghe,
+        cellulare: clean.cellulare,
+        note: clean.note,
+        tipoCandidatura,
+        consensoPrivacy: true,
+        versioneInformativa: config.versioneInformativa,
+        regolamentoAccettato: true,
+        regolamentoVersione: regolamentoVersionLabel,
+        regolamentoDocId: regolamentoDocIdLabel,
+        regoleChatAccettate: true,
+        versioneRegoleChat: chatRulesVersionLabel,
+        selectedTeam:
+          tipoCandidatura === 'SUBENTRO' && selectedTeam
+            ? {
+                id: selectedTeam.id,
+                clubId: selectedTeam.clubId,
+                normalizedKey: selectedTeam.normalizedKey,
+                serieKey: selectedTeam.serieKey,
+                nome: selectedTeam.nome,
+              }
+            : null,
+      });
       const submittedAtIso = new Date().toISOString();
-
-      let accettazioneSyncedOnFirestore = false;
-      try {
-        accettazioneSyncedOnFirestore = await saveAccettazioneDocumentale({
-          candidaturaId: result.id,
-          codiceCandidatura: result.codiceCandidatura,
-          emailFantaleghe: clean.emailFantaleghe,
-          privacyAccettata: true,
-          versionePrivacy: config.versioneInformativa,
-          regolamentoAccettato: true,
-          versioneRegolamento: regolamentoVersionLabel,
-          regolamentoDocId: regolamentoDocIdLabel,
-          regoleChatAccettate: true,
-          versioneRegoleChat: chatRulesVersionLabel,
-        });
-      } catch {
-        // Non blocca il completamento lato candidato
-      }
+      const confirmedTeamName =
+        tipoCandidatura === 'LIBERA'
+          ? 'CANDIDATURA LIBERA'
+          : result.selectedTeam?.nome || clean.nomeSquadra;
+      const confirmedSerie =
+        tipoCandidatura === 'LIBERA'
+          ? ''
+          : result.selectedTeam?.serie || selectedTeam?.serie || '';
 
       const nomeCompleto = `${clean.nome} ${clean.cognome}`;
       const baseRecord: SubmittedWizardRecord = {
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
+        tipoCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
         cellulare: clean.cellulare,
-        nomeSquadra: clean.nomeSquadra,
+        nomeSquadra: confirmedTeamName,
+        serieSquadra: confirmedSerie || undefined,
         nomeCompleto,
         note: clean.note || undefined,
         submittedAtIso,
@@ -708,9 +848,11 @@ export function RecruitmentWizard({
       onCandidaturaSubmitted?.({
         id: result.id,
         codiceCandidatura: result.codiceCandidatura,
+        tipoCandidatura,
         emailFantaleghe: clean.emailFantaleghe,
         cellulare: clean.cellulare,
-        nomeSquadra: clean.nomeSquadra,
+        nomeSquadra: confirmedTeamName,
+        serieSquadra: confirmedSerie || undefined,
         nomeCompleto,
         submittedAtIso,
         acceptedDocs: {
@@ -718,7 +860,7 @@ export function RecruitmentWizard({
           versioneRegolamento: regolamentoVersionLabel,
           versioneRegoleChat: chatRulesVersionLabel,
           acceptedAtIso: submittedAtIso,
-          accettazioneSyncedOnFirestore,
+          accettazioneSyncedOnFirestore: result.accettazioneSyncedOnFirestore,
         },
       });
 
@@ -754,7 +896,24 @@ export function RecruitmentWizard({
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
-      setSubmitError(parseFirestoreUiError(err));
+      if (err instanceof OfficialBridgeError) {
+        if (
+          err.status === 409 ||
+          err.code === 'TEAM_NOT_AVAILABLE' ||
+          err.code === 'TEAM_ALREADY_ASSIGNED' ||
+          err.code === 'TEAM_NOT_FOUND'
+        ) {
+          setSelectedTeam(null);
+          setStep1Error(err.message);
+          setSubmitError(err.message);
+          await loadAvailableTeams(true);
+          setStep(1);
+          return;
+        }
+        setSubmitError(err.message);
+      } else {
+        setSubmitError(parseFirestoreUiError(err));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -841,6 +1000,7 @@ export function RecruitmentWizard({
         cognome.trim().length >= 1 &&
         emailValidHint &&
         phoneValidHint &&
+        tipoCandidatura !== '' &&
         squadValidHint
       );
     }
@@ -1114,27 +1274,324 @@ export function RecruitmentWizard({
                     )}
                   </div>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label htmlFor="ficup-squadra" className="block text-xs font-bold uppercase tracking-wider text-slate-700">
-                        Nome della squadra proposta *
-                      </label>
-                      {squadValidHint && (
-                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
-                          <Check className="w-3.5 h-3.5" /> OK
-                        </span>
-                      )}
+                  {/* SCELTA PERCORSO CANDIDATURA + SELETTORE ZONA VAR CONDIZIONALE */}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-4">
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h2 className="font-display text-base sm:text-lg font-black tracking-wide text-[#0B1F4D]">
+                          Desideri subentrare in una squadra disponibile della FICUP? *
+                        </h2>
+                        {squadValidHint && (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                            <Check className="w-3.5 h-3.5" />
+                            {tipoCandidatura === 'LIBERA' ? 'Candidatura libera' : 'Squadra scelta'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs sm:text-sm text-slate-600">
+                        Scegli se candidarti prendendo subito un club libero della Zona VAR oppure se inviare una candidatura senza squadra.
+                      </p>
                     </div>
-                    <input
-                      id="ficup-squadra"
-                      type="text"
-                      required
-                      maxLength={80}
-                      value={nomeSquadra}
-                      onChange={(e) => setNomeSquadra(e.target.value)}
-                      placeholder="Es. Atletico Fantacalcio"
-                      className={inputClass}
-                    />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        disabled={!hasAvailableRedTeams}
+                        onClick={() => {
+                          if (!hasAvailableRedTeams) return;
+                          setTipoCandidatura('SUBENTRO');
+                          setStep1Error(null);
+                        }}
+                        className={`text-left p-4 rounded-xl border-2 transition-all space-y-1 ${
+                          !hasAvailableRedTeams
+                            ? 'border-slate-200 bg-slate-100 text-slate-400 opacity-60 cursor-not-allowed'
+                            : tipoCandidatura === 'SUBENTRO'
+                            ? 'border-[#0B1F4D] bg-[#0B1F4D] text-white shadow-sm cursor-pointer'
+                            : 'border-slate-200 bg-white text-[#0B1F4D] hover:border-[#0B1F4D]/50 cursor-pointer'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-display text-xs sm:text-sm font-black tracking-wide uppercase">
+                            SÌ — SELEZIONA UNA SQUADRA
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                              !hasAvailableRedTeams
+                                ? 'bg-slate-200 text-slate-500'
+                                : tipoCandidatura === 'SUBENTRO'
+                                ? 'bg-[#D4AF37] text-[#071436]'
+                                : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            }`}
+                          >
+                            {availableTeamsData
+                              ? `${availableTeamsData.totalFreeTeams} Allarme Rosso`
+                              : 'Zona VAR'}
+                          </span>
+                        </div>
+                        <p
+                          className={`text-xs ${
+                            !hasAvailableRedTeams
+                              ? 'text-slate-400'
+                              : tipoCandidatura === 'SUBENTRO'
+                              ? 'text-slate-200'
+                              : 'text-slate-600'
+                          }`}
+                        >
+                          {hasAvailableRedTeams
+                            ? 'Scegli subito una delle squadre in Allarme Rosso libere verificate in Zona VAR.'
+                            : 'Nessuna squadra in Allarme Rosso disponibile al momento per il subentro.'}
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTipoCandidatura('LIBERA');
+                          setSelectedTeam(null);
+                          setStep1Error(null);
+                        }}
+                        className={`text-left p-4 rounded-xl border-2 transition-all cursor-pointer space-y-1 ${
+                          tipoCandidatura === 'LIBERA'
+                            ? 'border-[#0B1F4D] bg-[#0B1F4D] text-white shadow-sm'
+                            : 'border-slate-200 bg-white text-[#0B1F4D] hover:border-[#0B1F4D]/50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-display text-xs sm:text-sm font-black tracking-wide uppercase">
+                            NO — CANDIDATURA SENZA SQUADRA
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                              tipoCandidatura === 'LIBERA'
+                                ? 'bg-[#D4AF37] text-[#071436]'
+                                : 'bg-sky-50 text-sky-800 border border-sky-200'
+                            }`}
+                          >
+                            Libera
+                          </span>
+                        </div>
+                        <p
+                          className={`text-xs ${
+                            tipoCandidatura === 'LIBERA' ? 'text-slate-200' : 'text-slate-600'
+                          }`}
+                        >
+                          Candidatura generale senza prenotazione squadra: lo staff ti contatterà.
+                        </p>
+                      </button>
+                    </div>
+
+                    {tipoCandidatura === 'LIBERA' && (
+                      <div className="rounded-xl bg-sky-50 border border-sky-200 px-4 py-3 text-xs sm:text-sm text-sky-950">
+                        Hai scelto la <strong>candidatura libera senza squadra</strong>: nessuna squadra verrà bloccata e potrai proseguire subito verso Privacy, Regolamento e invio.
+                      </div>
+                    )}
+
+                    {tipoCandidatura === 'SUBENTRO' && (
+                      <div className="pt-2 border-t border-slate-200 space-y-4">
+                        {/* Pacco Regalo Grande Senza Box */}
+                        <div className="py-2 flex items-center gap-4 sm:gap-5 bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-transparent rounded-2xl p-4 border border-[#D4AF37]/30">
+                          <motion.div
+                            animate={{ y: [0, -5, 0], rotate: [0, 2, -2, 0] }}
+                            transition={{ repeat: Infinity, duration: 2.4, ease: 'easeInOut' }}
+                            className="relative shrink-0"
+                          >
+                            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#FDE68A] to-[#D4AF37] opacity-60 blur-xs" />
+                            <div className="relative w-16 h-16 sm:w-18 sm:h-18 rounded-2xl bg-gradient-to-br from-[#0B1F4D] to-[#071436] border-2 border-[#D4AF37] flex flex-col items-center justify-center text-[#FDE68A] shadow-xl">
+                              <Gift className="w-7 h-7 text-[#D4AF37] mb-0.5" />
+                              <span className="font-display font-black text-[11px] tracking-tight text-white">+50 FC</span>
+                            </div>
+                          </motion.div>
+                          <div className="space-y-1 min-w-0">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#D4AF37]/20 text-[#0B1F4D] text-[10px] font-black tracking-wider uppercase">
+                              <Sparkles className="w-3 h-3 text-[#C69214]" />
+                              <span>Bonus Benvenuto Attivo</span>
+                            </div>
+                            <p className="font-display text-sm sm:text-base font-black text-[#0B1F4D]">
+                              +50 Fanta Crediti Omaggio sul Budget di Mercato
+                            </p>
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              Scegliendo questo club libero in Allarme Rosso, riceverai subito 50 crediti extra per rinforzare la rosa e puntare direttamente al titolo FICUP!
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <p className="text-xs sm:text-sm font-semibold text-[#0B1F4D]">
+                            Seleziona una squadra disponibile (solo club con stato LIBERA):
+                          </p>
+                          <button
+                            type="button"
+                            disabled={teamsLoading}
+                            onClick={() => loadAvailableTeams(true)}
+                            className="min-h-[38px] px-3.5 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-[#0B1F4D] hover:bg-slate-100 disabled:opacity-50 inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${teamsLoading ? 'animate-spin' : ''}`} />
+                            <span>Aggiorna disponibilità</span>
+                          </button>
+                        </div>
+
+                        {availableTeamsData && !teamsError && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="relative">
+                              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                              <input
+                                type="search"
+                                value={teamSearch}
+                                onChange={(e) => setTeamSearch(e.target.value)}
+                                placeholder="Cerca squadra per nome..."
+                                className="w-full min-h-[44px] pl-10 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-sm text-[#0B1F4D] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/25"
+                              />
+                            </div>
+
+                            <select
+                              aria-label="Filtra squadre per serie"
+                              value={teamSerieFilter}
+                              onChange={(e) =>
+                                setTeamSerieFilter(e.target.value as 'TUTTE' | AllowedSerieKey)
+                              }
+                              className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-sm font-medium text-[#0B1F4D] focus:outline-none focus:ring-2 focus:ring-[#0B1F4D]/25"
+                            >
+                              <option value="TUTTE">
+                                Tutte le serie ({availableTeamsData.totalFreeTeams} libere)
+                              </option>
+                              {(Object.keys(SERIE_LABELS) as AllowedSerieKey[]).map((key) => (
+                                <option key={key} value={key}>
+                                  {SERIE_LABELS[key]} ({availableTeamsData.bySerie[key] ?? 0})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {teamsLoading && !availableTeamsData && (
+                          <div className="rounded-xl border border-slate-200 bg-white p-6 flex items-center justify-center gap-2.5 text-sm text-slate-600">
+                            <Loader2 className="w-4 h-4 animate-spin text-[#0B1F4D]" />
+                            <span>Verifica in tempo reale delle squadre libere dalla Zona VAR ufficiale...</span>
+                          </div>
+                        )}
+
+                        {teamsError && (
+                          <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm text-red-900">
+                            <div className="flex items-start gap-2.5">
+                              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                              <div className="space-y-0.5">
+                                <p className="font-bold">Disponibilità squadre non verificabile</p>
+                                <p>{teamsError}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => loadAvailableTeams(true)}
+                              className="min-h-[38px] px-4 py-1.5 rounded-lg bg-white border border-red-300 text-xs font-bold text-red-900 hover:bg-red-100 cursor-pointer shrink-0"
+                            >
+                              Riprova
+                            </button>
+                          </div>
+                        )}
+
+                        {!teamsLoading && !teamsError && availableTeamsData && availableTeamsData.totalFreeTeams === 0 && (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center space-y-2">
+                            <p className="text-sm font-bold text-[#0B1F4D]">
+                              Nessuna squadra libera disponibile al momento
+                            </p>
+                            <p className="text-xs sm:text-sm text-slate-700">
+                              Puoi comunque procedere selezionando l&apos;opzione <strong>NO — CANDIDATURA SENZA SQUADRA</strong> qui sopra.
+                            </p>
+                          </div>
+                        )}
+
+                        {!teamsError && availableTeamsData && availableTeamsData.totalFreeTeams > 0 && (
+                          <>
+                            {filteredAvailableTeams.length === 0 ? (
+                              <div className="rounded-xl border border-slate-200 bg-white p-5 text-center text-xs sm:text-sm text-slate-600">
+                                Nessuna squadra libera corrisponde ai filtri di ricerca inseriti.
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pr-1">
+                                {filteredAvailableTeams.map((team) => {
+                                  const isChosen =
+                                    selectedTeam?.clubId === team.clubId &&
+                                    selectedTeam?.serieKey === team.serieKey;
+                                  const sportCat = team.sportCategory ?? 'REGOLARE';
+                                  return (
+                                    <button
+                                      key={`${team.serieKey}:${team.clubId || team.id || team.normalizedKey}`}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedTeam(team);
+                                        if (step1Error) setStep1Error(null);
+                                      }}
+                                      className={`text-left p-3.5 rounded-xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                                        isChosen
+                                          ? 'border-[#0B1F4D] bg-[#0B1F4D] text-white shadow-sm'
+                                          : 'border-slate-200 bg-white text-[#0B1F4D] hover:border-[#0B1F4D]/50'
+                                      }`}
+                                    >
+                                      <div className="min-w-0 space-y-0.5 flex-1">
+                                        <p className="font-bold text-sm truncate">{team.nome}</p>
+                                        <p
+                                          className={`text-xs font-semibold ${
+                                            isChosen ? 'text-[#FDE68A]' : 'text-[#0284C7]'
+                                          }`}
+                                        >
+                                          {team.serie}
+                                          {team.standingPos !== null
+                                            ? ` · #${team.standingPos} (${team.standingPt ?? 0} pt)`
+                                            : ''}
+                                        </p>
+                                        {sportCat !== 'REGOLARE' && (
+                                          <div className="pt-0.5 flex flex-wrap gap-1">
+                                            {sportCat === 'ALLARME_ROSSO' && (
+                                              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-red-100 text-red-800">
+                                                Allarme Rosso
+                                              </span>
+                                            )}
+                                            {sportCat === 'ATTENZIONE' && (
+                                              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                                Attenzione
+                                              </span>
+                                            )}
+                                            {sportCat === 'SOTTO_OSSERVAZIONE' && (
+                                              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-sky-100 text-sky-800">
+                                                Sotto Osservazione
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <span
+                                        className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-extrabold uppercase tracking-wider ${
+                                          isChosen
+                                            ? 'bg-emerald-500 text-white'
+                                            : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                        }`}
+                                      >
+                                        {isChosen ? 'Scelta' : 'Libera'}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {selectedTeam && (
+                              <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs sm:text-sm text-emerald-950">
+                                <span>
+                                  Squadra selezionata: <strong>{selectedTeam.nome}</strong> ({selectedTeam.serie})
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedTeam(null)}
+                                  className="text-xs font-bold underline cursor-pointer shrink-0"
+                                >
+                                  Cambia
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -1555,10 +2012,24 @@ export function RecruitmentWizard({
                       </div>
                       <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                          Squadra proposta
+                          Percorso candidatura
                         </span>
                         <span className="text-base font-bold text-[#0B1F4D]">
-                          {nomeSquadra.trim()}
+                          {tipoCandidatura === 'LIBERA'
+                            ? 'Candidatura libera (senza squadra)'
+                            : 'Subentro su squadra Zona VAR'}
+                        </span>
+                      </div>
+                      <div className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Squadra scelta (Zona VAR)
+                        </span>
+                        <span className="text-base font-bold text-[#0B1F4D]">
+                          {tipoCandidatura === 'LIBERA'
+                            ? 'Nessuna squadra selezionata'
+                            : selectedTeam
+                              ? `${selectedTeam.nome} · ${selectedTeam.serie}`
+                              : '—'}
                         </span>
                       </div>
                       {note.trim() && (

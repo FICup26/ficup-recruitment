@@ -52,6 +52,10 @@ export { INTRO_VIDEO_TOTAL_DURATION_MS };
 export interface FicupIntroVideoProps {
   codiceCandidatura: string;
   emailFantaleghe: string;
+  nomeCandidato?: string;
+  nomeSquadra?: string;
+  serieSquadra?: string;
+  tipoCandidatura?: 'LIBERA' | 'SUBENTRO';
   provisionalWhatsappUrl: string;
   canAccessProvisionalWa: boolean;
   realState: CandidaturaStato | null;
@@ -129,6 +133,10 @@ const FINALE_CONFETTI = [
 export function FicupIntroVideo({
   codiceCandidatura,
   emailFantaleghe,
+  nomeCandidato,
+  nomeSquadra,
+  serieSquadra,
+  tipoCandidatura,
   provisionalWhatsappUrl,
   canAccessProvisionalWa,
   realState,
@@ -182,7 +190,9 @@ export function FicupIntroVideo({
     setJustUnlockedPulse(false);
     setElapsedMs(stored?.videoCompleted ? INTRO_VIDEO_TOTAL_DURATION_MS : 0);
     setPhase(unlocked ? 'completed' : 'idle');
-    onUnlockStateChangeRef.current?.(unlocked, false);
+    window.setTimeout(() => {
+      onUnlockStateChangeRef.current?.(unlocked, false);
+    }, 0);
   }, [codiceCandidatura, emailFantaleghe]);
 
   useEffect(() => {
@@ -278,7 +288,9 @@ export function FicupIntroVideo({
       setUnlockedByVideo((prev) => {
         const wasAlreadyUnlocked = prev;
         setJustUnlockedPulse(true);
-        onUnlockStateChangeRef.current?.(true, !wasAlreadyUnlocked);
+        window.setTimeout(() => {
+          onUnlockStateChangeRef.current?.(true, !wasAlreadyUnlocked);
+        }, 0);
         return true;
       });
     },
@@ -430,7 +442,13 @@ export function FicupIntroVideo({
 
   const prefilledWhatsappLink = buildProvisionalWhatsappUrl(
     provisionalWhatsappUrl,
-    codiceCandidatura
+    {
+      codiceCandidatura,
+      nomeCandidato,
+      nomeSquadra: tipoCandidatura === 'LIBERA' ? '' : nomeSquadra,
+      serieSquadra: tipoCandidatura === 'LIBERA' ? '' : serieSquadra,
+      tipoCandidatura,
+    }
   );
   const isUnlockedForWhatsapp =
     unlockedByVideo && canAccessProvisionalWa && Boolean(prefilledWhatsappLink);

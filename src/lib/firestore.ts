@@ -61,6 +61,17 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export type TipoCandidatura = 'LIBERA' | 'SUBENTRO';
+
+export interface SelectedTeamInput {
+  id: string;
+  clubId: string;
+  normalizedKey: string;
+  serieKey: string;
+  serie?: string;
+  nome: string;
+}
+
 export interface CandidaturaInput {
   nome: string;
   cognome: string;
@@ -68,6 +79,8 @@ export interface CandidaturaInput {
   cellulare: string;
   nomeSquadra: string;
   note?: string;
+  tipoCandidatura?: TipoCandidatura;
+  selectedTeam?: SelectedTeamInput | null;
   consensoPrivacy: boolean;
   versioneInformativa: string;
   regolamentoAccettato?: boolean;
@@ -77,11 +90,16 @@ export interface CandidaturaInput {
 export interface CandidaturaRecord {
   id: string;
   codiceCandidatura: string;
+  tipoCandidatura: TipoCandidatura;
   nome: string;
   cognome: string;
   emailFantaleghe: string;
   cellulare: string;
   nomeSquadra: string;
+  squadraZonaVarNome: string;
+  squadraZonaVarId: string;
+  squadraZonaVarSerie: string;
+  squadraZonaVarSerieKey: string;
   note: string;
   regolamentoAccettatoNote: string;
   isCompleta: boolean;
@@ -247,6 +265,8 @@ export function generateCandidaturaCode(): string {
 const ITALIAN_MOBILE_REGEX = /^\+393[1-9]\d{8}$/;
 const PHONE_NOTE_TAG_REGEX = /^\[Cellulare:\s*([^\]]+)\]\s*$/i;
 const REG_NOTE_TAG_REGEX = /^\[Regolamento FICUP 26\/27:\s*([^\]]+)\]\s*$/i;
+const TIPO_NOTE_TAG_REGEX = /^\[Tipo Candidatura:\s*(LIBERA|SUBENTRO)\]\s*$/i;
+const ZONA_VAR_NOTE_TAG_REGEX = /^\[Squadra Zona VAR:\s*([^\]]+)\]\s*$/i;
 
 const BLOCKED_DUMMY_MOBILE_NUMBERS = new Set([
   '320000000',
@@ -393,6 +413,8 @@ export function encodeStructuredCandidaturaNote(params: {
   cellulare: string;
   regolamentoAccettato?: boolean;
   regolamentoVersione?: string;
+  tipoCandidatura?: TipoCandidatura;
+  selectedTeam?: SelectedTeamInput | null;
   userNote?: string;
 }): string {
   const headerLines: string[] = [`[Cellulare: ${params.cellulare.trim()}]`];
@@ -406,6 +428,19 @@ export function encodeStructuredCandidaturaNote(params: {
     }).format(new Date());
     const versionLabel = (params.regolamentoVersione ?? '').trim() || '2026.1';
     headerLines.push(`[Regolamento FICUP 26/27: Accettato il ${nowLabel} (v${versionLabel})]`);
+  }
+  if (params.tipoCandidatura) {
+    headerLines.push(`[Tipo Candidatura: ${params.tipoCandidatura}]`);
+  }
+  if (params.tipoCandidatura !== 'LIBERA' && params.selectedTeam) {
+    const teamName = params.selectedTeam.nome.trim();
+    const teamId = (params.selectedTeam.clubId || params.selectedTeam.id).trim();
+    const teamSerie = (params.selectedTeam.serie || params.selectedTeam.serieKey).trim();
+    if (teamName) {
+      headerLines.push(
+        `[Squadra Zona VAR: ${teamName} | ID: ${teamId || 'n/d'} | Serie: ${teamSerie || 'n/d'}]`
+      );
+    }
   }
 
   const headerBlock = headerLines.join('\n');
@@ -421,15 +456,31 @@ export function encodeStructuredCandidaturaNote(params: {
 export function parseStructuredCandidaturaNote(rawNote: string): {
   cellulare: string;
   regolamentoAccettatoNote: string;
+  tipoCandidatura: TipoCandidatura | '';
+  squadraZonaVarNome: string;
+  squadraZonaVarId: string;
+  squadraZonaVarSerie: string;
   cleanNote: string;
 } {
   if (!rawNote) {
-    return { cellulare: '', regolamentoAccettatoNote: '', cleanNote: '' };
+    return {
+      cellulare: '',
+      regolamentoAccettatoNote: '',
+      tipoCandidatura: '',
+      squadraZonaVarNome: '',
+      squadraZonaVarId: '',
+      squadraZonaVarSerie: '',
+      cleanNote: '',
+    };
   }
 
   const lines = rawNote.split(/\r?\n/);
   let cellulare = '';
   let regolamentoAccettatoNote = '';
+  let tipoCandidatura: TipoCandidatura | '' = '';
+  let squadraZonaVarNome = '';
+  let squadraZonaVarId = '';
+  let squadraZonaVarSerie = '';
   const remainingLines: string[] = [];
 
   for (const line of lines) {
@@ -443,12 +494,43 @@ export function parseStructuredCandidaturaNote(rawNote: string): {
       regolamentoAccettatoNote = regMatch[1].trim();
       continue;
     }
+    const tipoMatch = line.match(TIPO_NOTE_TAG_REGEX);
+    if (tipoMatch?.[1] && !tipoCandidatura) {
+      const normalizedTipo = tipoMatch[1].trim().toUpperCase();
+      if (normalizedTipo === 'LIBERA' || normalizedTipo === 'SUBENTRO') {
+        tipoCandidatura = normalizedTipo;
+      }
+      continue;
+    }
+    const zonaVarMatch = line.match(ZONA_VAR_NOTE_TAG_REGEX);
+    if (zonaVarMatch?.[1] && !squadraZonaVarNome) {
+      const segments = zonaVarMatch[1]
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (segments[0]) {
+        squadraZonaVarNome = segments[0];
+      }
+      for (let i = 1; i < segments.length; i += 1) {
+        const seg = segments[i];
+        if (/^id:/i.test(seg)) {
+          squadraZonaVarId = seg.replace(/^id:\s*/i, '').trim();
+        } else if (/^serie:/i.test(seg)) {
+          squadraZonaVarSerie = seg.replace(/^serie:\s*/i, '').trim();
+        }
+      }
+      continue;
+    }
     remainingLines.push(line);
   }
 
   return {
     cellulare,
     regolamentoAccettatoNote,
+    tipoCandidatura,
+    squadraZonaVarNome,
+    squadraZonaVarId,
+    squadraZonaVarSerie,
     cleanNote: remainingLines.join('\n').trim(),
   };
 }
@@ -458,7 +540,17 @@ export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaIn
   const cognome = input.cognome.trim().slice(0, 80);
   const emailFantaleghe = input.emailFantaleghe.trim().toLowerCase().slice(0, 160);
   const cellulare = normalizeAndValidateItalianPhone(input.cellulare);
-  const nomeSquadra = input.nomeSquadra.trim().slice(0, 80);
+  const tipoCandidatura: TipoCandidatura | undefined =
+    input.tipoCandidatura === 'LIBERA'
+      ? 'LIBERA'
+      : input.tipoCandidatura === 'SUBENTRO'
+        ? 'SUBENTRO'
+        : undefined;
+  const selectedTeam = tipoCandidatura === 'LIBERA' ? null : (input.selectedTeam ?? null);
+  const nomeSquadra =
+    tipoCandidatura === 'LIBERA'
+      ? 'CANDIDATURA LIBERA'
+      : (selectedTeam?.nome || input.nomeSquadra).trim().slice(0, 80);
   const note = (input.note ?? '').trim().slice(0, 750);
   const versioneInformativa = input.versioneInformativa.trim().slice(0, 32) || '2026.1';
 
@@ -471,7 +563,10 @@ export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaIn
   if (!EMAIL_REGEX.test(emailFantaleghe) || emailFantaleghe.length < 5) {
     throw new Error('Inserire un indirizzo email Fantaleghe valido.');
   }
-  if (nomeSquadra.length < 2) {
+  if (tipoCandidatura === 'SUBENTRO' && (!selectedTeam || !selectedTeam.nome.trim())) {
+    throw new Error('Seleziona una squadra libera dalla sezione Zona VAR prima di proseguire.');
+  }
+  if (tipoCandidatura !== 'LIBERA' && nomeSquadra.length < 2) {
     throw new Error('Il nome della squadra deve contenere almeno 2 caratteri.');
   }
   if (!input.consensoPrivacy) {
@@ -485,6 +580,8 @@ export function validateCandidaturaInput(input: CandidaturaInput): CandidaturaIn
     cellulare,
     nomeSquadra,
     note,
+    tipoCandidatura,
+    selectedTeam,
     consensoPrivacy: true,
     versioneInformativa,
     regolamentoAccettato: Boolean(input.regolamentoAccettato),
@@ -503,6 +600,8 @@ export async function submitCandidatura(
     cellulare: clean.cellulare,
     regolamentoAccettato: clean.regolamentoAccettato,
     regolamentoVersione: clean.regolamentoVersione,
+    tipoCandidatura: clean.tipoCandidatura,
+    selectedTeam: clean.selectedTeam,
     userNote: clean.note,
   });
 
@@ -682,6 +781,16 @@ export async function verifyAdminAuthorization(
   );
 }
 
+function inferSerieKeyLabel(rawSerie: string): string {
+  const clean = rawSerie.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (clean.includes('serie_a')) return 'serie_a';
+  if (clean.includes('serie_b')) return 'serie_b';
+  if (clean.includes('lega_pro_a') || clean.includes('legapro_a')) return 'lega_pro_a';
+  if (clean.includes('lega_pro_b') || clean.includes('legapro_b')) return 'lega_pro_b';
+  if (clean.includes('lega_pro_c') || clean.includes('legapro_c')) return 'lega_pro_c';
+  return clean;
+}
+
 function mapCandidaturaDoc(id: string, data: Record<string, unknown>): CandidaturaRecord {
   const nome = String(data.nome ?? '');
   const cognome = String(data.cognome ?? '');
@@ -690,11 +799,17 @@ function mapCandidaturaDoc(id: string, data: Record<string, unknown>): Candidatu
   const consensoPrivacy = Boolean(data.consensoPrivacy);
   const rawNote = String(data.note ?? '');
   const parsed = parseStructuredCandidaturaNote(rawNote);
+  const tipoCandidatura: TipoCandidatura =
+    parsed.tipoCandidatura === 'LIBERA' || parsed.tipoCandidatura === 'SUBENTRO'
+      ? parsed.tipoCandidatura
+      : nomeSquadra.trim().toUpperCase() === 'CANDIDATURA LIBERA' && !parsed.squadraZonaVarNome
+        ? 'LIBERA'
+        : 'SUBENTRO';
   const isCompleta = Boolean(
     nome.trim().length >= 1 &&
       cognome.trim().length >= 1 &&
       EMAIL_REGEX.test(emailFantaleghe.trim()) &&
-      nomeSquadra.trim().length >= 2 &&
+      (tipoCandidatura === 'LIBERA' || nomeSquadra.trim().length >= 2) &&
       parsed.cellulare.trim().length > 0 &&
       consensoPrivacy
   );
@@ -702,11 +817,16 @@ function mapCandidaturaDoc(id: string, data: Record<string, unknown>): Candidatu
   return {
     id,
     codiceCandidatura: String(data.codiceCandidatura ?? ''),
+    tipoCandidatura,
     nome,
     cognome,
     emailFantaleghe,
     cellulare: parsed.cellulare,
     nomeSquadra,
+    squadraZonaVarNome: parsed.squadraZonaVarNome,
+    squadraZonaVarId: parsed.squadraZonaVarId,
+    squadraZonaVarSerie: parsed.squadraZonaVarSerie,
+    squadraZonaVarSerieKey: inferSerieKeyLabel(parsed.squadraZonaVarSerie),
     note: parsed.cleanNote,
     regolamentoAccettatoNote: parsed.regolamentoAccettatoNote,
     isCompleta,
@@ -1861,3 +1981,328 @@ export async function saveWhatsappAutorizzazioneByAdmin(params: {
     });
   }
 }
+
+// =============================================================================
+// 4. PRENOTAZIONI ATOMICHE SQUADRE ZONA VAR (/squadre_assegnate)
+// =============================================================================
+
+export interface SquadraAssegnataRecord {
+  lockId: string;
+  clubId: string;
+  nomeSquadra: string;
+  serie: string;
+  serieKey: string;
+  candidaturaId: string;
+  codiceCandidatura: string;
+  statoAssegnazione: 'RISERVATA' | 'RILASCIATA' | string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export type TeamReservationBadgeStatus =
+  | 'ASSEGNATA'
+  | 'RISERVATA'
+  | 'RILASCIATA'
+  | 'LIBERA'
+  | 'DA VERIFICARE';
+
+export interface TeamReservationSummary {
+  chosenTeam: string;
+  chosenSerie: string;
+  chosenClubId: string;
+  assignedTeam: string;
+  reservationStatus: TeamReservationBadgeStatus;
+  detailText: string;
+  lockId: string;
+}
+
+export async function fetchSquadreAssegnateMap(): Promise<Record<string, SquadraAssegnataRecord>> {
+  const firestore = requireDb();
+  const path = 'squadre_assegnate';
+  try {
+    const snap = await getDocs(collection(firestore, path));
+    const byCandidaturaId: Record<string, SquadraAssegnataRecord> = {};
+    snap.docs.forEach((d) => {
+      const data = d.data();
+      const candId = String(data.candidaturaId ?? '').trim();
+      if (!candId) {
+        return;
+      }
+      const record: SquadraAssegnataRecord = {
+        lockId: String(data.lockId ?? d.id),
+        clubId: String(data.clubId ?? data.id ?? ''),
+        nomeSquadra: String(data.nomeSquadra ?? ''),
+        serie: String(data.serie ?? ''),
+        serieKey: String(data.serieKey ?? ''),
+        candidaturaId: candId,
+        codiceCandidatura: String(data.codiceCandidatura ?? ''),
+        statoAssegnazione: String(data.statoAssegnazione ?? 'RISERVATA').toUpperCase(),
+        createdAt: toDateOrNull(data.createdAt),
+        updatedAt: toDateOrNull(data.updatedAt),
+      };
+
+      const existing = byCandidaturaId[candId];
+      if (
+        !existing ||
+        (existing.statoAssegnazione === 'RILASCIATA' && record.statoAssegnazione !== 'RILASCIATA') ||
+        ((record.updatedAt?.getTime() ?? 0) > (existing.updatedAt?.getTime() ?? 0))
+      ) {
+        byCandidaturaId[candId] = record;
+      }
+    });
+    return byCandidaturaId;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return {};
+    }
+    handleFirestoreError(error, OperationType.LIST, path, {
+      suppressPermissionDeniedLog: true,
+    });
+  }
+}
+
+export function resolveTeamReservationSummary(
+  c: Pick<
+    CandidaturaRecord,
+    | 'nomeSquadra'
+    | 'squadraZonaVarNome'
+    | 'squadraZonaVarId'
+    | 'squadraZonaVarSerie'
+    | 'stato'
+    | 'archiviata'
+  > & { tipoCandidatura?: TipoCandidatura },
+  lock?: SquadraAssegnataRecord | null,
+  waAuth?: Pick<
+    WhatsappAutorizzazioneRecord,
+    'statoAutorizzazione' | 'squadraAssegnataZonaVar'
+  > | null
+): TeamReservationSummary {
+  const assignedRef = (waAuth?.squadraAssegnataZonaVar ?? '').trim();
+  const isLiberaPath =
+    c.tipoCandidatura === 'LIBERA' ||
+    (c.nomeSquadra.trim().toUpperCase() === 'CANDIDATURA LIBERA' &&
+      !c.squadraZonaVarNome &&
+      !lock);
+
+  if (isLiberaPath && !assignedRef && waAuth?.statoAutorizzazione !== 'AUTORIZZATO') {
+    return {
+      chosenTeam: 'Nessuna squadra selezionata',
+      chosenSerie: '',
+      chosenClubId: '',
+      assignedTeam: '',
+      reservationStatus: 'LIBERA',
+      detailText: 'Candidatura libera senza selezione squadra',
+      lockId: '',
+    };
+  }
+
+  const chosenTeam = isLiberaPath
+    ? 'Nessuna squadra selezionata'
+    : (c.squadraZonaVarNome || lock?.nomeSquadra || c.nomeSquadra).trim();
+  const chosenSerie = isLiberaPath ? '' : (c.squadraZonaVarSerie || lock?.serie || '').trim();
+  const chosenClubId = isLiberaPath ? '' : (c.squadraZonaVarId || lock?.clubId || '').trim();
+  const lockReleased =
+    c.stato === 'RESPINTO' ||
+    c.archiviata ||
+    lock?.statoAssegnazione === 'RILASCIATA';
+
+  if (lockReleased && !isLiberaPath) {
+    return {
+      chosenTeam,
+      chosenSerie,
+      chosenClubId,
+      assignedTeam: assignedRef || chosenTeam,
+      reservationStatus: 'RILASCIATA',
+      detailText: c.archiviata
+        ? 'Rilasciata (candidatura archiviata)'
+        : c.stato === 'RESPINTO'
+          ? 'Rilasciata (candidatura respinta)'
+          : 'Rilasciata',
+      lockId: lock?.lockId ?? '',
+    };
+  }
+
+  if (
+    waAuth?.statoAutorizzazione === 'AUTORIZZATO' ||
+    (c.stato === 'COMPLETATO' && waAuth?.statoAutorizzazione !== 'REVOCATO')
+  ) {
+    return {
+      chosenTeam,
+      chosenSerie,
+      chosenClubId,
+      assignedTeam: assignedRef || (isLiberaPath ? '' : chosenTeam),
+      reservationStatus: 'ASSEGNATA',
+      detailText: assignedRef
+        ? `Assegnata definitivamente (${assignedRef})`
+        : 'Assegnata definitivamente',
+      lockId: lock?.lockId ?? '',
+    };
+  }
+
+  if (lock?.statoAssegnazione === 'RISERVATA' || Boolean(c.squadraZonaVarNome)) {
+    return {
+      chosenTeam,
+      chosenSerie,
+      chosenClubId,
+      assignedTeam: assignedRef || chosenTeam,
+      reservationStatus: 'RISERVATA',
+      detailText: 'Prenotata in attesa di conferma staff',
+      lockId: lock?.lockId ?? '',
+    };
+  }
+
+  return {
+    chosenTeam,
+    chosenSerie,
+    chosenClubId,
+    assignedTeam: assignedRef || chosenTeam,
+    reservationStatus: 'DA VERIFICARE',
+    detailText: 'Richiesta manuale o pregressa senza blocco Zona VAR',
+    lockId: lock?.lockId ?? '',
+  };
+}
+
+// =============================================================================
+// 5. BLOCCHI MANUALI STAFF SQUADRE ZONA VAR (/squadre_bloccate_portale)
+// =============================================================================
+
+export interface SquadraBloccataPortaleRecord {
+  lockId: string;
+  clubId: string;
+  normalizedKey: string;
+  nomeSquadra: string;
+  serie: string;
+  serieKey: string;
+  motivo: string;
+  bloccata: boolean;
+  bloccataDaUid: string;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export function sanitizePortalLockId(rawId: string): string {
+  const cleaned = rawId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+  return cleaned || 'club_unknown';
+}
+
+export async function fetchSquadreBloccatePortaleMap(): Promise<
+  Record<string, SquadraBloccataPortaleRecord>
+> {
+  if (!db) {
+    return {};
+  }
+  const path = 'squadre_bloccate_portale';
+  try {
+    const snap = await getDocs(collection(db, path));
+    const result: Record<string, SquadraBloccataPortaleRecord> = {};
+    snap.docs.forEach((d) => {
+      const data = d.data();
+      const lockId = String(data.lockId ?? d.id).trim();
+      if (!lockId) return;
+      result[lockId] = {
+        lockId,
+        clubId: String(data.clubId ?? ''),
+        normalizedKey: String(data.normalizedKey ?? ''),
+        nomeSquadra: String(data.nomeSquadra ?? ''),
+        serie: String(data.serie ?? ''),
+        serieKey: String(data.serieKey ?? ''),
+        motivo: String(data.motivo ?? ''),
+        bloccata: data.bloccata !== false,
+        bloccataDaUid: String(data.bloccataDaUid ?? ''),
+        createdAt: toDateOrNull(data.createdAt),
+        updatedAt: toDateOrNull(data.updatedAt),
+      };
+    });
+    return result;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return {};
+    }
+    return {};
+  }
+}
+
+export async function blockTeamInPortalZonaVar(params: {
+  lockId: string;
+  clubId: string;
+  normalizedKey: string;
+  nomeSquadra: string;
+  serie: string;
+  serieKey: string;
+  motivo?: string;
+  adminUser: User;
+}): Promise<void> {
+  const firestore = requireDb();
+  const safeLockId = sanitizePortalLockId(params.lockId);
+  const path = `squadre_bloccate_portale/${safeLockId}`;
+  const docRef = doc(firestore, 'squadre_bloccate_portale', safeLockId);
+  const motivo =
+    (params.motivo ?? '').trim().slice(0, 300) ||
+    'Squadra bloccata dallo Staff del portale (già occupata o non disponibile).';
+
+  try {
+    const existingSnap = await getDoc(docRef);
+    if (existingSnap.exists()) {
+      await setDoc(
+        docRef,
+        {
+          lockId: safeLockId,
+          clubId: params.clubId.trim().slice(0, 128),
+          normalizedKey: params.normalizedKey.trim().slice(0, 128),
+          nomeSquadra: params.nomeSquadra.trim().slice(0, 120) || safeLockId,
+          serie: params.serie.trim().slice(0, 60),
+          serieKey: params.serieKey.trim().slice(0, 40),
+          motivo,
+          bloccata: true,
+          bloccataDaUid: params.adminUser.uid,
+          createdAt: existingSnap.data().createdAt ?? serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: false }
+      );
+    } else {
+      await setDoc(docRef, {
+        lockId: safeLockId,
+        clubId: params.clubId.trim().slice(0, 128),
+        normalizedKey: params.normalizedKey.trim().slice(0, 128),
+        nomeSquadra: params.nomeSquadra.trim().slice(0, 120) || safeLockId,
+        serie: params.serie.trim().slice(0, 60),
+        serieKey: params.serieKey.trim().slice(0, 40),
+        motivo,
+        bloccata: true,
+        bloccataDaUid: params.adminUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      throw new Error(
+        "Permessi Firestore insufficienti per bloccare la squadra su 'squadre_bloccate_portale'. Verifica che le regole aggiornate in firestore.rules siano pubblicate sul progetto candidature-ficup."
+      );
+    }
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function unblockTeamInPortalZonaVar(lockId: string): Promise<void> {
+  const firestore = requireDb();
+  const safeLockId = sanitizePortalLockId(lockId);
+  const path = `squadre_bloccate_portale/${safeLockId}`;
+  try {
+    await deleteDoc(doc(firestore, 'squadre_bloccate_portale', safeLockId));
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      throw new Error(
+        "Permessi Firestore insufficienti per sbloccare la squadra su 'squadre_bloccate_portale'. Verifica che le regole aggiornate in firestore.rules siano pubblicate sul progetto candidature-ficup."
+      );
+    }
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

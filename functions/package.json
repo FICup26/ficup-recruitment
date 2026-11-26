@@ -1,0 +1,30 @@
+{
+  "name": "ficup-official-bridge-functions",
+  "version": "1.0.0",
+  "description": "Cloud Functions read-only bridge from candidature-ficup to official ficup-c9186 Firestore",
+  "main": "lib/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "npm run build && node --test lib/test/*.test.js",
+    "verify:live": "node scripts/verifyLiveReadOnly.mjs",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions --project candidature-ficup"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "firebase-admin": "^13.4.0",
+    "firebase-functions": "^6.3.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "typescript": "^5.8.3"
+  },
+  "private": true
+}
