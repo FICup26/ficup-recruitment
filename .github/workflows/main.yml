@@ -34,6 +34,9 @@ jobs:
           VITE_APPS_SCRIPT_WEBAPP_URL: ${{ secrets.VITE_APPS_SCRIPT_WEBAPP_URL }}
         run: bun run build
 
+      - name: Esclude APK da Firebase Hosting
+        run: rm -f dist/download/ficup-release.apk
+
       - name: Pubblica su Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
