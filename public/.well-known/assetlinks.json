@@ -1,0 +1,15 @@
+
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.web.ficup.twa",
+      "sha256_cert_fingerprints": [
+        "B7:CA:4F:5D:51:FB:3F:C5:A8:A6:FA:2E:CE:BA:9A:A9:87:B4:E6:63:60:40:C4:13:9C:16:CB:07:06:8A:15:CB"
+      ]
+    }
+  }
+]
