@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>FICUP — Download App Android Ufficiale</title>
+    <meta
+      name="description"
+      content="Scarica l'applicazione Android ufficiale FICUP 26/27. APK firmato e protetto con Digital Asset Links."
+    />
+    <link rel="icon" type="image/x-icon" href="../favicon.ico" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #020617;
+        color: #f8fafc;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      header {
+        border-bottom: 1px solid #1e293b;
+        background: rgba(15, 23, 42, 0.8);
+        backdrop-filter: blur(12px);
+        position: sticky;
+        top: 0;
+        z-index: 30;
+      }
+      .nav-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 0 1rem;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #94a3b8;
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 600;
+        transition: color 0.2s;
+      }
+      .back-link:hover { color: #ffffff; }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 800;
+        font-size: 0.95rem;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+      }
+      main {
+        flex: 1;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 2.5rem 1rem;
+        width: 100%;
+      }
+      .card {
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 1.25rem;
+        padding: 2rem;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        position: relative;
+        overflow: hidden;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: rgba(198, 146, 20, 0.15);
+        color: #eab308;
+        border: 1px solid rgba(198, 146, 20, 0.3);
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 0.35rem 0.85rem;
+        border-radius: 9999px;
+        margin-bottom: 1.25rem;
+      }
+      h1 {
+        font-size: 1.85rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: #ffffff;
+        margin-bottom: 0.85rem;
+      }
+      p.lead {
+        color: #94a3b8;
+        font-size: 1.05rem;
+        line-height: 1.6;
+        margin-bottom: 2rem;
+      }
+      .download-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        background: #C69214;
+        color: #071436;
+        font-weight: 800;
+        font-size: 1.05rem;
+        padding: 1rem 2rem;
+        border-radius: 0.85rem;
+        text-decoration: none;
+        box-shadow: 0 10px 25px -5px rgba(198, 146, 20, 0.4);
+        transition: transform 0.15s, background-color 0.15s;
+        width: 100%;
+      }
+      .download-btn:hover {
+        background: #d49e18;
+        transform: translateY(-2px);
+      }
+      .meta {
+        margin-top: 1rem;
+        font-size: 0.8rem;
+        color: #64748b;
+        text-align: center;
+      }
+      .meta code {
+        color: #facc15;
+        font-family: monospace;
+      }
+      .features {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin: 2rem 0;
+      }
+      @media(max-width: 640px) { .features { grid-template-columns: 1fr; } }
+      .feature-box {
+        background: rgba(2, 6, 23, 0.6);
+        border: 1px solid #1e293b;
+        border-radius: 0.85rem;
+        padding: 1.25rem;
+      }
+      .feature-box h3 {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 0.35rem;
+      }
+      .feature-box p {
+        font-size: 0.8rem;
+        color: #94a3b8;
+        line-height: 1.5;
+      }
+      .instructions {
+        border-top: 1px solid #1e293b;
+        padding-top: 1.75rem;
+        margin-top: 1.75rem;
+      }
+      .instructions h2 {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 1rem;
+      }
+      .instructions ol {
+        padding-left: 1.25rem;
+        font-size: 0.9rem;
+        color: #cbd5e1;
+        line-height: 1.7;
+      }
+      .instructions li { margin-bottom: 0.5rem; }
+      footer {
+        border-top: 1px solid #0f172a;
+        background: #020617;
+        padding: 1.5rem;
+        text-align: center;
+        font-size: 0.75rem;
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="nav-container">
+        <a href="/" class="back-link">
+          ← Torna al Portale FICUP
+        </a>
+        <div class="brand">
+          <span>FICUP 26/27</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div class="card">
+        <div class="badge">
+          📱 App Ufficiale Android (TWA)
+        </div>
+        <h1>Scarica l'App FICUP 26/27</h1>
+        <p class="lead">
+          Installa l'applicazione ufficiale FICUP direttamente sul tuo dispositivo Android per accedere a tutte le funzioni della lega nazionale gratuita, area staff e notifiche in tempo reale.
+        </p>
+
+        <div>
+          <a href="/download/ficup-release.apk" class="download-btn">
+            ⬇️ SCARICA FICUP (APK UFFICIALE)
+          </a>
+          <div class="meta">
+            File: <code>ficup-release.apk</code> • ~4.4 MB • SHA256: <code>8e6787b60d5c5f0b30dbccb65500e51effa4c694bdb91c78eb47b29b0ab51997</code>
+          </div>
+        </div>
+
+        <div class="features">
+          <div class="feature-box">
+            <h3>🔒 Firmato & Sicuro</h3>
+            <p>Certificato di firma ufficiale con Digital Asset Links attivo e verificato.</p>
+          </div>
+          <div class="feature-box">
+            <h3>⚡ Senza Registrazione</h3>
+            <p>Nessuna richiesta di dati superflui. Accesso diretto alla tua area.</p>
+          </div>
+        </div>
+
+        <div class="instructions">
+          <h2>Istruzioni per l'installazione su Android</h2>
+          <ol>
+            <li>Tocca il pulsante <strong>SCARICA FICUP</strong> per avviare il download dell'APK.</li>
+            <li>Se compare l'avviso di sicurezza del browser, tocca <strong>"Scarica comunque"</strong>.</li>
+            <li>A download completato, apri il file <code>ficup-release.apk</code> dalle notifiche.</li>
+            <li>Se richiesto, autorizza l'installazione da questa sorgente nelle impostazioni di Android, quindi procedi con l'installazione.</li>
+          </ol>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      © 2026/2027 Fanta Italia Cup (FICUP) • L'universo del Fantacalcio
+    </footer>
+  </body>
+</html>
