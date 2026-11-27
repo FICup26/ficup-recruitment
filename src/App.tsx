@@ -6,6 +6,7 @@ import { FicupLogo } from './components/FicupLogo';
 import { Header, type AppView } from './components/Header';
 import { HomePage } from './components/HomePage';
 import { PrivacyModal } from './components/PrivacyModal';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { RecruitmentWizard } from './components/RecruitmentWizard';
 import { WaitingRoom } from './components/WaitingRoom';
 import {
@@ -254,6 +255,8 @@ function FicupPortal() {
         operationalEmail={publicConfig.emailOperativa}
         onClose={() => setFooterPrivacyOpen(false)}
       />
+
+      <PWAInstallBanner />
     </div>
   );
 }

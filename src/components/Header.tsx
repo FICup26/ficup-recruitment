@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { FicupLogo } from './FicupLogo';
 import { setPendingOfficialTab } from './OfficialLeagueSection';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type AppView = 'home' | 'wizard' | 'waiting-room' | 'admin';
 
@@ -146,8 +147,10 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
           </button>
         </nav>
 
-        {/* Zone 3: Primary CTA + Original FICUP Burger Menu (Mobile & Desktop) */}
+        {/* Zone 3: Primary CTA + In-App PWA Install + Original FICUP Burger Menu */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <PWAInstallButton variant="header" />
+
           <button
             type="button"
             onClick={() => handleLink('wizard')}
@@ -291,6 +294,13 @@ export function Header({ activeView, hasWaitingPass = false, onNavigate }: Heade
                   <Shield className="w-4 h-4 text-slate-500 shrink-0" />
                   <span className="truncate">Area Staff (Admin)</span>
                 </button>
+
+                <div className="pt-3 mt-2 border-t border-slate-200">
+                  <PWAInstallButton
+                    variant="drawer"
+                    onAfterTrigger={() => setMobileMenuOpen(false)}
+                  />
+                </div>
               </div>
             </motion.div>
           </>
