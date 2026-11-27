@@ -12,10 +12,36 @@ export default defineConfig(({mode}) => {
     process.env.VITE_APPS_SCRIPT_WEBAPP_URL ||
     process.env.APPS_SCRIPT_WEBAPP_URL ||
     '';
-  const explicitBase = env.VITE_BASE_PATH || process.env.VITE_BASE_PATH || '';
-  const isGithubPages = process.env.GITHUB_ACTIONS === 'true';
-  const base =
-    explicitBase || (mode === 'production' && isGithubPages ? '/ficup-recruitment/' : '/');
+  const explicitBase = (env.VITE_BASE_PATH || process.env.VITE_BASE_PATH || '').trim();
+  const deployTarget = (env.VITE_DEPLOY_TARGET || process.env.VITE_DEPLOY_TARGET || '')
+    .trim()
+    .toLowerCase();
+  const githubWorkflow = (process.env.GITHUB_WORKFLOW || '').trim().toLowerCase();
+  const isGithubActions = process.env.GITHUB_ACTIONS === 'true';
+
+  const base = (() => {
+    if (explicitBase) {
+      return explicitBase;
+    }
+    if (deployTarget === 'firebase') {
+      return '/';
+    }
+    if (deployTarget === 'github-pages') {
+      return mode === 'production' ? '/ficup-recruitment/' : '/';
+    }
+    if (mode === 'production' && isGithubActions) {
+      if (githubWorkflow.includes('firebase')) {
+        return '/';
+      }
+      if (
+        githubWorkflow === 'deploy to github pages' ||
+        githubWorkflow.includes('github pages')
+      ) {
+        return '/ficup-recruitment/';
+      }
+    }
+    return '/';
+  })();
 
   return {
     base,
